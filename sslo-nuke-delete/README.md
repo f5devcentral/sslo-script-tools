@@ -1,7 +1,8 @@
 # F5 SSL Orchestrator Nuclear Delete Script
 A small Bash utility to completely remove all SSL Orchestrator configurations and objects.
 
-### Current version: 7.0.0
+### Current version:
+7.0.0
 
 ### Version support
 This utility works on BIG-IP 14.1 and above, SSL Orchestrator 5.x and above.
