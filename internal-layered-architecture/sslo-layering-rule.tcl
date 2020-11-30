@@ -15,7 +15,7 @@ when CLIENT_ACCEPTED {
 #####################################################
 when RULE_INIT {
     ## User-defined: DEBUG logging flag (1=on, 0=off)
-    set static::SSLODEBUG 1
+    set static::SSLODEBUG 0
 
     ## User-defined: Default topology if no rules match (the topology name as defined in SSLO)
     set static::default_topology "intercept"
