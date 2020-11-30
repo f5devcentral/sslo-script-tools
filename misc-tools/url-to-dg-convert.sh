@@ -1,8 +1,10 @@
 #!/bin/bash
 
-## This script will convert a custom URL category to a string data group. It is currently configured to convert the built-in SSL Orchestrator Pinners URL category, but can be used for other custom URL categories. Change the name of the custom URL category on the 'tmsh' line, and change the data group name on the 'ltm data-group' line.
+## This script will convert a custom URL category to a string data group. It is currently configured to convert the built-in 
+## SSL Orchestrator Pinners URL category, but can be used for other custom URL categories. Change the name of the custom URL 
+## category on the 'tmsh' line, and change the data group name on the 'ltm data-group' line.
 
-## Create this script in a directory on the BIG-IP and 'chmod +x <script>' to make executable.
+## Create this script in a directory on the BIG-IP and 'chmod +x url-to-dg-convert.sh' to make executable.
 
 ## get url category entries
 tmsh list sys url-db url-category sslo-urlCatPinners urls |grep -E '^\s*http' |sed -E 's/\s*//;s/https?:\/\///;s/\\\*//;s/\/.*//' > tmp_cat
