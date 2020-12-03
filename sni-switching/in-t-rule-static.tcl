@@ -9,7 +9,8 @@
 ##      - Add the library-rule iRule to LTM (name "library-rule")
 ##      - Add the SNI-switching-rule to LTM (name is arbitrary)
 ##      - Create an L3 inbound gateway (or L2 inbound) mode SSLO topology. Define a server cert/key to be used as the "default" (when no SNI matches)
-##      - Edit this iRule to select the correct client SSL profile based on the SNI
+##      - Edit the corresponding Interception Rule and add the SNI switching rule. 
+##      - Edit this iRule to select the correct client SSL profile based on the SNI. Deploy and test.
 
 when CLIENT_ACCEPTED priority 250 {
     TCP::collect
