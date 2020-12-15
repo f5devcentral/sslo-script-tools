@@ -1,6 +1,6 @@
 ## SSL Orchestrator Use Case: Internal Layered Architecture - SSLOLIB Traffic Matching Library
-## Version: 2.0
-## Date: 2020-11-30
+## Version: 2.1
+## Date: 2020-12-15
 ## Author: Kevin Stewart, F5 Networks
 ##
 ## Configuration:
@@ -146,9 +146,9 @@ proc SNI { arg } {
             "URL" { return [expr { ${s_sni} eq [lindex ${arglist} 1] } ? 1 : 0] }
             "URLGLOB" { return [expr { ${s_sni} ends_with [lindex ${arglist} 1] } ? 1 : 0] }
             "CAT" { 
-                ## optimization: re-uses existing category lookup results
-                if { [info exists catg] } { if { [catch { set match 0 ; foreach cat ${catg} { if { [lsearch -exact [lindex ${arglist} 1] ${cat}] >= 0 } { set match 1 } } ; set res [expr { ${match} } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} }
-                } else { set catg [CATEGORY::lookup "https://${s_sni}/" request_default_and_custom] ; if { [catch { set match 0 ; foreach cat ${catg} { if { [lsearch -exact [lindex ${arglist} 1] ${cat}] >= 0 } { set match 1 } } ; set res [expr { ${match} } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+                ## optimization 2.0: re-uses existing category lookup results
+                ## optimization 2.1: test and don't fail if URLDB is not provisioned
+                if { [info exists catg] } { if { [catch { set match 0 ; foreach cat ${catg} { if { [lsearch -exact [lindex ${arglist} 1] ${cat}] >= 0 } { set match 1 }} ; set res [expr { ${match} } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } } else { set URLF "CATEGORY\x3a\x3alookup" ; if { [catch "${URLF} https://${s_sni}/ request_default_and_custom" catg] || ![llength ${catg}] } { return 0 } else { if { [catch { set match 0 ; foreach cat ${catg} { if { [lsearch -exact [lindex ${arglist} 1] ${cat}] >= 0 } { set match 1 } } ; set res [expr { ${match} } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} }}}
                 #if { [catch { set match 0 ; foreach cat [CATEGORY::lookup "https://${s_sni}/" request_default_and_custom] { if { [lsearch -exact [lindex ${arglist} 1] ${cat}] >= 0 } { set match 1 } } ; set res [expr { ${match} } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } 
             }
             "DG" { if { [catch { set res [expr { [class match -- ${s_sni} equals [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
