@@ -2,7 +2,7 @@
 A set of iRules for creating a layered SSL Orchestrator, to reduce complexity by treating topologies as functions.
 
 ### Current version:
-2.0.0
+2.1.0
 
 ### Version support
 This utility works on BIG-IP 14.1 and above, SSL Orchestrator 5.x to 8.x.
