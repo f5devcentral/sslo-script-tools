@@ -35,10 +35,10 @@ While the Internal Layered Architecture can be used in any direction, it is most
 
   - Transparent forward proxy
   - Explicit forward proxy (proxy in front)
-  - Explicit forwward proxy (proxy in back)
+  - Explicit forward proxy (proxy in back)
 
 #### Transparent Forward Proxy
-In a transparent forward proxy, the steering VIP and SSL Orchestrator topologies are all configured as transparent forward proxy, and the steering VIP simply forwards traffic based on traffic match to a specific internal topology function. Under the **transparent-proxy** subfolder are two iRules. The **SSLOLIB** iRule is a library rule, and the 
+In a transparent forward proxy, the steering VIP and SSL Orchestrator topologies are all configured as transparent forward proxy, and the steering VIP simply forwards traffic based on traffic match to a specific internal topology function. Under the **transparent-proxy** subfolder are two iRules. The **SSLOLIB** iRule is a library rule, and the **sslo-layering-rule** is the iRule that's applied to the steering VIP and calls the library iRule functions.
 
 - **Step 1**: Import this SSLOLIB iRule (name "SSLOLIB")
 
