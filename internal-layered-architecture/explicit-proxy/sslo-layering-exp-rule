@@ -1,0 +1,61 @@
+## SSL Orchestrator Use Case: Internal Layered Architecture - Client-Facing Switching iRule
+## Version: 2.0
+## Date: 2020-11-30
+## Author: Kevin Stewart, F5 Networks
+## Configuration: see SSLOLIBEXP iRule for build instructions
+
+## Set a default topology assuming no other matches (d not edit)
+when CLIENT_ACCEPTED {
+    call SSLOLIBEXP::target $static::default_topology
+}
+
+
+#####################################################
+## EDIT BELOW THIS BLOCK ############################
+#####################################################
+when RULE_INIT {
+    ## User-defined: DEBUG logging flag (1=on, 0=off)
+    set static::SSLODEBUGEXP 1
+
+    ## User-defined: Default topology if no rules match (the topology name as defined in SSLO)
+    set static::default_topology "interceptexp"
+
+    ## User-defined: URL category list (create as many lists as required)
+    set static::URLCAT_Finance_Health {
+        /Common/Financial_Data_and_Services
+        /Common/Health_and_Medicine
+    }
+}
+when HTTP_PROXY_REQUEST {
+    ## disable proxy to create pass-through
+    HTTP::proxy disable
+    
+    ## set local host variable (for logging)
+    set host ""
+    
+    ## Standard certificate Pinners bypassexp rule (specify your bypassexp topology)
+    if { [call SSLOLIBEXP::HOST CAT:/Common/sslo-urlCatPinners] } { call SSLOLIBEXP::target "bypassexp" ${host} "pinners" ; return}
+
+    ################################
+    #### CONDITIONS GO HERE ####
+    ################################
+    #if { [call SSLOLIBEXP::SRCIP IP:10.1.0.0/16] } { call SSLOLIBEXP::target "bypassexp" ${host} "SRCIP" ; return }
+    #if { [call SSLOLIBEXP::SRCIP DG:my-srcip-dg] } { call SSLOLIBEXP::target "bypassexp" ${host} "SRCIP" ; return }
+
+    #if { [call SSLOLIBEXP::SRCPORT PORT:5000] } { call SSLOLIBEXP::target "bypassexp" ${host} "SRCPORT" ; return }
+    #if { [call SSLOLIBEXP::SRCPORT PORT:1000-60000] } { call SSLOLIBEXP::target "bypassexp" ${host} "SRCPORT" ; return }
+
+    #if { [call SSLOLIBEXP::DSTIP IP:93.184.216.34] } { call SSLOLIBEXP::target "bypassexp" ${host} "DSTIP" ; return }
+    #if { [call SSLOLIBEXP::DSTIP DG:my-destip-dg] } { call SSLOLIBEXP::target "bypassexp" ${host} "DSTIP" ; return }
+
+    #if { [call SSLOLIBEXP::HOST URL:www.example.com] } { call SSLOLIBEXP::target "bypassexp" ${host} "HOSTURL" ; return }
+    #if { [call SSLOLIBEXP::HOST URLGLOB:.example.com] } { call SSLOLIBEXP::target "bypassexp" ${host} "HOSTURLGLOB" ; return }
+
+    #if { [call SSLOLIBEXP::HOST CAT:$static::URLCAT_Finance_Health] } { call SSLOLIBEXP::target "bypassexp" ${host} "HOSTCAT" ; return }
+    #if { [call SSLOLIBEXP::HOST CAT:/Common/Financial_Data_and_Services] } { call SSLOLIBEXP::target "bypassexp" ${host} "HOSTCAT" ; return }
+
+    #if { [call SSLOLIBEXP::HOST DG:my-host-dg] } { call SSLOLIBEXP::target "bypassexp" ${host} "HOSTDGGLOB" ; return }
+    #if { [call SSLOLIBEXP::HOST DGGLOB:my-hostglob-dg] } { call SSLOLIBEXP::target "bypassexp" ${host} "HOSTDGGLOB" ; return }
+
+    ## To combine these, you can use smple AND|OR logic:
+}
