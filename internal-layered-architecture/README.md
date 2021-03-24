@@ -57,7 +57,7 @@ In a transparent forward proxy, the steering VIP and SSL Orchestrator topologies
       - No security policy rules - just a single ALL rule with TLS bypass action (and service chain)
       - Attached to a separate "dummy" VLAN
 
-  - Create any additional topologies as required, as separate functions based on discrete actions (allow/block, intercept/bypass, service chain)
+  - Create any additional topologies as required, as separate functions based on discrete actions (allow/block, intercept/bypass, service chain, egress)
 
 - **Step 4**: Import the traffic switching iRule
   - Set necessary static configuration values in RULE_INIT as required
@@ -77,7 +77,97 @@ In a transparent forward proxy, the steering VIP and SSL Orchestrator topologies
 
 - **Step 6**: modify the traffic switching iRule with the required detection commands. See below.
 
-### Traffic selector commands (to be used in traffic switching iRule)
+
+
+#### Transparent Forward Proxy
+In a transparent forward proxy, the steering VIP and SSL Orchestrator topologies are all configured as transparent forward proxy, and the steering VIP simply forwards traffic based on traffic match to a specific internal topology function. Under the **transparent-proxy** subfolder are two iRules. The **SSLOLIB** iRule is a library rule, and the **sslo-layering-rule** is the iRule that's applied to the steering VIP and calls the library iRule functions.
+
+- **Step 1**: Import this SSLOLIB iRule (name "SSLOLIB")
+
+- **Step 2**: Build a set of "dummy" VLANs. A topology must be bound to a unique VLAN. But since the topologies in this architecture won't be listening on an actual client-facing VLAN, you will need to create a separate dummy VLAN for each topology you intend to create. A dummy VLAN is basically a VLAN with no interface assigned. In the BIG-IP UI, under Network -> VLANs, click Create. Give your VLAN a name and click Finished. It will ask you to confirm since you're not attaching an interface. Click OK to continue. Repeat this step by creating unique VLAN names for each topology you are planning to use.
+
+- **Step 3**: Build semi-static SSL Orchestrator topologies based on common actions (ex. allow, intercept, service chain)
+  - Minimally create a normal "intercept" topology and a separate "bypass" topology
+  
+    Intercept topology:
+      - L3 outbound topology configuration, normal topology settings, SSL config, services, service chain
+      - No security policy rules - just a single ALL rule with TLS intercept action (and service chain)
+      - Attach to a "dummy" VLAN
+
+    Bypass topology:
+      - L3 outbound topology configuration, skip SSL config, re-use services, service chains
+      - No security policy rules - just a single ALL rule with TLS bypass action (and service chain)
+      - Attached to a separate "dummy" VLAN
+
+  - Create any additional topologies as required, as separate functions based on discrete actions (allow/block, intercept/bypass, service chain, egress)
+
+- **Step 4**: Import the traffic switching iRule
+  - Set necessary static configuration values in RULE_INIT as required
+  - Define any URL category lists in RULE_INIT as required (see example). Use the following command to get a list of URL categories:
+
+    `tmsh list sys url-db url-category |grep "sys url-db url-category " |awk -F" " '{print $4}'`
+
+- **Step 5**: Create a client-facing topology switching VIP
+  - Type: Standard
+  - Source: 0.0.0.0/0
+  - Destination: 0.0.0.0/0:0
+  - Protocol: TCP
+  - VLAN: client-facing VLAN
+  - Address/Port Translation: disabled
+  - Default Persistence Profile: ssl
+  - iRule: traffic switching iRule
+
+- **Step 6**: modify the traffic switching iRule with the required detection commands. See **Traffic Selector commands - ** information below.
+
+
+
+#### Explicit Forward Proxy (proxy in front)
+
+
+In a transparent forward proxy, the steering VIP and SSL Orchestrator topologies are all configured as transparent forward proxy, and the steering VIP simply forwards traffic based on traffic match to a specific internal topology function. Under the **transparent-proxy** subfolder are two iRules. The **SSLOLIB** iRule is a library rule, and the **sslo-layering-rule** is the iRule that's applied to the steering VIP and calls the library iRule functions.
+
+- **Step 1**: Import this SSLOLIB iRule (name "SSLOLIB")
+
+- **Step 2**: Build a set of "dummy" VLANs. A topology must be bound to a unique VLAN. But since the topologies in this architecture won't be listening on an actual client-facing VLAN, you will need to create a separate dummy VLAN for each topology you intend to create. A dummy VLAN is basically a VLAN with no interface assigned. In the BIG-IP UI, under Network -> VLANs, click Create. Give your VLAN a name and click Finished. It will ask you to confirm since you're not attaching an interface. Click OK to continue. Repeat this step by creating unique VLAN names for each topology you are planning to use.
+
+- **Step 3**: Build semi-static SSL Orchestrator topologies based on common actions (ex. allow, intercept, service chain)
+  - Minimally create a normal "intercept" topology and a separate "bypass" topology
+  
+    Intercept topology:
+      - L3 outbound topology configuration, normal topology settings, SSL config, services, service chain
+      - No security policy rules - just a single ALL rule with TLS intercept action (and service chain)
+      - Attach to a "dummy" VLAN
+
+    Bypass topology:
+      - L3 outbound topology configuration, skip SSL config, re-use services, service chains
+      - No security policy rules - just a single ALL rule with TLS bypass action (and service chain)
+      - Attached to a separate "dummy" VLAN
+
+  - Create any additional topologies as required, as separate functions based on discrete actions (allow/block, intercept/bypass, service chain, egress)
+
+- **Step 4**: Import the traffic switching iRule
+  - Set necessary static configuration values in RULE_INIT as required
+  - Define any URL category lists in RULE_INIT as required (see example). Use the following command to get a list of URL categories:
+
+    `tmsh list sys url-db url-category |grep "sys url-db url-category " |awk -F" " '{print $4}'`
+
+- **Step 5**: Create a client-facing topology switching VIP
+  - Type: Standard
+  - Source: 0.0.0.0/0
+  - Destination: 0.0.0.0/0:0
+  - Protocol: TCP
+  - VLAN: client-facing VLAN
+  - Address/Port Translation: disabled
+  - Default Persistence Profile: ssl
+  - iRule: traffic switching iRule
+
+- **Step 6**: modify the traffic switching iRule with the required detection commands. See **Traffic Selector commands - Transparent Proxy** information below.
+
+
+
+
+
+### Traffic selector commands - Transparent Proxy (to be used in traffic switching iRule)
 - Call the "target" proc with the following parameters ([topology name], ${sni}, [message])
   - **[topology name]** is the base name of the defined topology
   - **${sni}** is static here and returns the server name indication value (SNI) for logging
