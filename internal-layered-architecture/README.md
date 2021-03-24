@@ -37,6 +37,8 @@ While the Internal Layered Architecture can be used in any direction, it is most
   - Explicit forward proxy (proxy in front)
   - Explicit forward proxy (proxy in back)
 
+--------------------------------------------------
+
 #### Transparent Forward Proxy
 In a transparent forward proxy, the steering VIP and SSL Orchestrator topologies are all configured as transparent forward proxy, and the steering VIP simply forwards traffic based on a traffic match to a specific internal topology function. Under the **transparent-proxy** subfolder are two iRules. The **SSLOLIB** iRule is a library rule, and the **sslo-layering-rule** is the iRule that's applied to the steering VIP and calls the library iRule functions.
 
@@ -77,6 +79,7 @@ In a transparent forward proxy, the steering VIP and SSL Orchestrator topologies
 
 - **Step 6**: modify the traffic switching iRule with the required detection commands. See **Traffic Selector commands - Transparent Proxy** information below.
 
+--------------------------------------------------
 
 #### Explicit Forward Proxy (proxy in front)
 In this scenario, an explicit proxy configuration is built up front at the steering layer. A BIG-IP LTM explicit proxy consists of a DNS resolver, TCP tunnel, HTTP explicit profile, an HTTP explicit proxy virtual server, and a separate TCP tunnel virtual server. Traffic flows from the client to the HTTP explicit proxy VIP and is tunneled through the TCP tunnel VIP. Therefore to configure the explicit proxy for the Internal Layered Architecture, simply apply the layering iRule to the TCP tunnel VIP, which will behave exactly the same way as the transparent proxy implementation. 
