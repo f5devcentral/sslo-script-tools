@@ -38,6 +38,8 @@ While the Internal Layered Architecture can be used in any direction, it is most
   - Explicit forwward proxy (proxy in back)
 
 #### Transparent Forward Proxy
+In a transparent forward proxy, the steering VIP and SSL Orchestrator topologies are all configured as transparent forward proxy, and the steering VIP simply forwards traffic based on traffic match to a specific internal topology function. Under the **transparent-proxy** subfolder are two iRules. The **SSLOLIB** iRule is a library rule, and the 
+
 - **Step 1**: Import this SSLOLIB iRule (name "SSLOLIB")
 
 - **Step 2**: Build a set of "dummy" VLANs. A topology must be bound to a unique VLAN. But since the topologies in this architecture won't be listening on an actual client-facing VLAN, you will need to create a separate dummy VLAN for each topology you intend to create. A dummy VLAN is basically a VLAN with no interface assigned. In the BIG-IP UI, under Network -> VLANs, click Create. Give your VLAN a name and click Finished. It will ask you to confirm since you're not attaching an interface. Click OK to continue. Repeat this step by creating unique VLAN names for each topology you are planning to use.
