@@ -1,0 +1,158 @@
+## SSL Orchestrator Use Case: Internal Layered Architecture - SSLOLIB Traffic Matching Library
+## Version: 2.1
+## Date: 2020-12-15
+## Author: Kevin Stewart, F5 Networks
+##
+## Configuration:
+##  - Step 1: Import this SSLOLIB iRule (name "SSLOLIB")
+##
+##  - Step 2: Build semi-static SSL Orchestrator topologies based on common actions (ex. allow, intercept, service chain)
+##      - Minimally create a normal "intercept" topology and a separate "bypass" topology
+##          Intercept topology:
+##            - L3 outbound topology configuration, normal topology settings, SSL config, services, service chain
+##            - No security policy rules - just a single ALL rule with TLS intercept action (and service chain)
+##            - Attach to a "dummy" VLAN
+##          Bypass topology:
+##            - L3 outbound topology configuration, skip SSL config, re-use services, service chains
+##            - No security policy rules - just a single ALL rule with TLS bypass action (and service chain)
+##            - Attached to a separate "dummy" VLAN
+##      - Create any additional topologies as required, as separate functions based on discrete actions (allow/block, intercept/bypass, service chain)
+##
+##  - Step 3: Import the traffic switching iRule
+##      - Set necessary static configuration values in RULE_INIT as required
+##      - Define any URL category lists in RULE_INIT as required (see example). Use the following command to get a list of URL categories:
+##           tmsh list sys url-db url-category |grep "sys url-db url-category " |awk -F" " '{print $4}'
+##
+##  - Step 4: Create a client-facing topology switching VIP
+##      Type: Standard
+##      Source: 0.0.0.0/0
+##      Destination: 0.0.0.0/0:0
+##      Protocol: TCP
+##      VLAN: client-facing VLAN
+##      Address/Port Translation: disabled
+##      Default Persistence Profile: ssl
+##      iRule: traffic switching iRule
+##
+##  - Step 5: modify the traffic switching iRule with the required detection commands (below)
+##
+##
+## Traffic selector commands (to be used in traffic switching iRule)
+##  - Call the "target" proc with the following parameters (<topology name>, ${sni}, <message>)
+##      - <topology name> is the base name of the defined topology
+##      - ${sni} is static here and returns the server name indication value (SNI) for logging
+##      - <message> is any string message to send to the log (ex. which rule matched)
+##      - return is added at the end of each command to cancel any further matching
+##      - Example: 
+##           call SSLOLIB::target "bypass" ${sni} "SRCIP"
+##
+##  - Use the following commands to query the proc function for matches (all return true or false)
+##    All commands run in CLIENTSSL_CLIENTHELLO to act on SSL traffic
+##
+##      Source IP Detection (static IP, IP subnet, data group match)
+##         SRCIP IP:<ip/subnet>
+##         SRCIP DG:<data group name> (address-type data group)
+##         if { [call SSLOLIB::SRCIP IP:10.1.0.0/16] } { call SSLOLIB::target "topology name" ${sni} "SRCIP" ; return }
+##         if { [call SSLOLIB::SRCIP DG:my_sip_list] } { call SSLOLIB::target "topology name" ${sni} "SRCIP" ; return }
+## 
+##      Source Port Detection (static port, port range, data group match)
+##         SRCPORT PORT:<port/port-range>
+##         SRCPORT DG:<data group name> (integer-type data group)
+##         if { [call SSLOLIB::SRCPORT PORT:15000] } { call SSLOLIB::target "topology name" ${sni} "SRCPORT" ; return }
+##         if { [call SSLOLIB::SRCPORT PORT:1000-60000] } { call SSLOLIB::target "topology name" ${sni} "SRCPORT" ; return }
+##         if { [call SSLOLIB::SRCPORT DG:my-sport-list] } { call SSLOLIB::target "topology name" ${sni} "SRCPORT" ; return }
+## 
+##      Destination IP Detection (static IP, IP subnet, data group match)
+##         DSTIP IP:<ip/subnet>
+##         DSTIP DG:<data group name> (address-type data group)
+##         if { [call SSLOLIB::DSTIP IP:93.184.216.34] } { call SSLOLIB::target "topology name" ${sni} "DSTIP" ; return }
+##         if { [call SSLOLIB::DSTIP DG:my-dip-list] } { call SSLOLIB::target "topology name" ${sni} "DSTIP" ; return }
+## 
+##      Destination Port Detection (static port, port range, data group match)
+##         DSTPORT PORT:<port/port-range>
+##         DSTPORT DG:<data group name> (integer-type data group)
+##         if { [call SSLOLIB::DSTPORT PORT:443] } { call SSLOLIB::target "topology name" ${sni} "DSTPORT" ; return }
+##         if { [call SSLOLIB::DSTPORT PORT:1-1024] } { call SSLOLIB::target "topology name" ${sni} "DSTPORT" ; return }
+##         if { [call SSLOLIB::DSTPORT DG:my-dport-list] } { call SSLOLIB::target "topology name" ${sni} "DSTPORT" ; return }
+##
+##      SNI Detection (static URL, category match, data group match)
+##         SNI URL:<static url>
+##         SNI URLGLOB:<static url> (ends_with match)
+##         if { [call SSLOLIB::SNI URL:www.example.com] } { call SSLOLIB::target "topology name" ${sni} "SNIURL" ; return }
+##         if { [call SSLOLIB::SNI URLGLOB:.example.com] } { call SSLOLIB::target "topology name" ${sni} "SNIURLGLOB" ; return }
+##
+##         SNI CAT:<category name or list of categories>
+##         if { [call SSLOLIB::SNI CAT:/Common/Financial_Data_and_Services] } { call SSLOLIB::target "topology name" ${sni} "SNICAT" ; return }
+##         if { [call SSLOLIB::SNI CAT:$static::URLCAT_Finance_Health] } { call SSLOLIB::target "topology name" ${sni} "SNICAT" ; return }
+##    
+##         SNI DG:<data group name> (string-type data group)
+##         SNI DGGLOB:<data group name> (ends_with match)
+##         if { [call SSLOLIB::SNI DG:my-sni-list] } { call SSLOLIB::target "topology name" ${sni} "SNIDG" ; return }
+##         if { [call SSLOLIB::SNI DGGLOB:my-sniglob-list] } { call SSLOLIB::target "topology name" ${sni} "SNIDGGLOB" ; return }
+##
+##      Combinations: above selectors can be used in combinations as required. Example:
+##         if { ([call SSLOLIB::SRCIP IP:10.1.0.0/16]) and ([call SSLOLIB::DSTIP IP:93.184.216.34]) }
+##
+## DO NOT MODIFY BELOW ##
+## SSLOLIB library functions perform error detection and will return 0 (false) in any reasonable error condition (ex. incorrect data group name).
+
+proc errorlog {message} {
+    if { $static::SSLODEBUG } {
+        log -noname local0. "SSLOLIB Error :: [IP::client_addr]:[TCP::client_port] -> [IP::local_addr]:[TCP::local_port] :: ${message}"
+    }
+}
+proc target {topology {sni ""} {message ""}} {
+    virtual "/Common/sslo_${topology}.app/sslo_${topology}-in-t-4"
+    if { ( $static::SSLODEBUG ) and ( ${sni} ne "" ) and ( ${message} ne "" ) } {
+        log -noname local0. "SSLO Switch Log :: [IP::client_addr]:[TCP::client_port] -> [IP::local_addr]:[TCP::local_port] :: (${sni}) :: Match on ${message} :: Sending to ${topology}"
+    }
+}
+proc SRCIP { arg } {
+    set arglist [split ${arg} ":"]
+    switch -- [lindex ${arglist} 0] {
+        "IP" { if { [catch { set res [expr { [IP::addr [lindex ${arglist} 1] equals [IP::client_addr]] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+        "DG" { if { [catch { set res [expr { [class match -- [IP::client_addr] equals [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+    }
+}
+proc SRCPORT { arg } {
+    set arglist [split ${arg} ":"]
+    switch -- [lindex ${arglist} 0] {
+        "PORT" { if { [catch { if { [lindex ${arglist} 1] contains "-" } { set portlist [split [lindex ${arglist} 1] "-"] ; set res [expr { ( [TCP::client_port] > [lindex ${portlist} 0] ) and ( [TCP::client_port] < [lindex ${portlist} 1] ) } ? 1 : 0] } else {set res [expr { [lindex ${arglist} 1] == [TCP::client_port] } ? 1 : 0] }} err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+        "DG" { if { [catch { set res [expr { [class match -- [TCP::client_port] equals [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+    }
+}
+proc DSTIP { arg } {
+    set arglist [split ${arg} ":"]
+    switch -- [lindex ${arglist} 0] {
+        "IP" { if { [catch { set res [expr { [IP::addr [lindex ${arglist} 1] equals [IP::local_addr]] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+        "DG" { if { [catch { set res [expr { [class match -- [IP::local_addr] equals [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+    }
+}
+proc DSTPORT { arg } {
+    set arglist [split ${arg} ":"]
+    switch -- [lindex ${arglist} 0] {
+        "PORT" { if { [catch { if { [lindex ${arglist} 1] contains "-" } { set portlist [split [lindex ${arglist} 1] "-"] ; set res [expr { ( [TCP::local_port] > [lindex ${portlist} 0] ) and ( [TCP::local_port] < [lindex ${portlist} 1] ) } ? 1 : 0] } else {set res [expr { [lindex ${arglist} 1] == [TCP::local_port] } ? 1 : 0] }} err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+        "DG" { if { [catch { set res [expr { [class match -- [TCP::local_port] equals [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+    }
+}
+proc SNI { arg } {
+    upvar sni s_sni
+    upvar cat catg
+    set s_sni "NULL"
+    set sni_exists [SSL::extensions exists -type 0]
+    if { $sni_exists } {
+        binary scan [SSL::extensions -type 0] @9a* s_sni
+        set arglist [split ${arg} ":"]
+        switch -- [lindex ${arglist} 0] {
+            "URL" { return [expr { ${s_sni} eq [lindex ${arglist} 1] } ? 1 : 0] }
+            "URLGLOB" { return [expr { ${s_sni} ends_with [lindex ${arglist} 1] } ? 1 : 0] }
+            "CAT" { 
+                ## optimization 2.0: re-uses existing category lookup results
+                ## optimization 2.1: test and don't fail if URLDB is not provisioned
+                if { [info exists catg] } { if { [catch { set match 0 ; foreach cat ${catg} { if { [lsearch -exact [lindex ${arglist} 1] ${cat}] >= 0 } { set match 1 }} ; set res [expr { ${match} } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } } else { set URLF "CATEGORY\x3a\x3alookup" ; if { [catch "${URLF} https://${s_sni}/ request_default_and_custom" catg] || ![llength ${catg}] } { return 0 } else { if { [catch { set match 0 ; foreach cat ${catg} { if { [lsearch -exact [lindex ${arglist} 1] ${cat}] >= 0 } { set match 1 } } ; set res [expr { ${match} } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} }}}
+                #if { [catch { set match 0 ; foreach cat [CATEGORY::lookup "https://${s_sni}/" request_default_and_custom] { if { [lsearch -exact [lindex ${arglist} 1] ${cat}] >= 0 } { set match 1 } } ; set res [expr { ${match} } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } 
+            }
+            "DG" { if { [catch { set res [expr { [class match -- ${s_sni} equals [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+            "DGGLOB" { if { [catch { set res [expr { [class match -- ${s_sni} ends_with [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+        }
+    } else { return 0 }
+}
