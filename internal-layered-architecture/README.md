@@ -82,9 +82,11 @@ In a transparent forward proxy, the steering VIP and SSL Orchestrator topologies
 --------------------------------------------------
 
 #### Explicit Forward Proxy (proxy in front)
-In this scenario, an explicit proxy configuration is built up front at the steering layer. A BIG-IP LTM explicit proxy consists of a DNS resolver, TCP tunnel, HTTP explicit profile, an HTTP explicit proxy virtual server, and a separate TCP tunnel virtual server. Traffic flows from the client to the HTTP explicit proxy VIP and is tunneled through the TCP tunnel VIP. Therefore to configure the explicit proxy for the Internal Layered Architecture, simply apply the layering iRule to the TCP tunnel VIP, which will behave exactly the same way as the transparent proxy implementation. 
+In this scenario, an explicit proxy configuration is built up front at the steering layer. A BIG-IP LTM explicit proxy consists of a DNS resolver, TCP tunnel, HTTP explicit profile, an HTTP explicit proxy virtual server, and a separate TCP tunnel virtual server. Traffic flows from the client to the HTTP explicit proxy VIP and is tunneled through the TCP tunnel VIP. Therefore to configure the explicit proxy for the Internal Layered Architecture, simply apply the layering iRule to the TCP tunnel VIP, which will behave exactly the same way as the transparent proxy implementation. This will use the same iRules under the **transparent-proxy** subfolder.
 
 ![SSL Orchestrator Internal Layered Architecture](images/sslo-internal-layered-architecture-ep-front.png)
+
+*Note: to perform explicit proxy authentication, an SWG-Explicit access profile would be applied to the frontend explicit proxy configuration.*
 
 - **Step 1**: Create the DNS Resolver for the HTTP explicit config. Under Network -> DNS Resolvers -> DNS Resolver List, click **Create** provide a unique name and click **Finished**. Now click to edit this new DNS resolver and navigate to the Forward Zones tab and click **Add**. 
   - Name: enter "." (without quotation marks)
@@ -164,9 +166,54 @@ In this scenario, an explicit proxy configuration is built up front at the steer
 
 - **Step 12**: modify the traffic switching iRule with the required detection commands. See **Traffic Selector commands - Transparent Proxy** information below.
 
+--------------------------------------------------
 
+#### Explicit Forward Proxy (proxy in back)
+In this scenario, an explicit proxy configuration is built at each topology instance, and the frontend steering layer is a simple forwarder. The steering policy is a bit different in this case as the frontend will be observing explicit proxy requests instead of TLS SNI traffic. This difference is captured under the **explicit-proxy** subfolder. The **SSLOLIBEXP** iRule is the library rule, and the **sslo-layering-exp-rule** is applied to the frontend forwarder.
 
+![SSL Orchestrator Internal Layered Architecture](images/sslo-internal-layered-architecture-ep-back.png)
 
+*Note: to perform explicit proxy authentication, an SWG-Explicit access profile would be applied to each of the backend explicit proxy topologies. This pattern provides an additional advantage of adding authentication enabled/disabled actions based on steering policy.*
+
+- **Step 1**: Import this SSLOLIBEXP iRule (name it "SSLOLIBEXP")
+
+- **Step 2**: Build a set of "dummy" VLANs. A topology must be bound to a unique VLAN. But since the topologies in this architecture won't be listening on an actual client-facing VLAN, you will need to create a separate dummy VLAN for each topology you intend to create. A dummy VLAN is basically a VLAN with no interface assigned. In the BIG-IP UI, under Network -> VLANs, click Create. Give your VLAN a name and click Finished. It will ask you to confirm since you're not attaching an interface. Click OK to continue. Repeat this step by creating unique VLAN names for each topology you are planning to use.
+
+- **Step 3**: Build semi-static SSL Orchestrator explicit proxy topologies based on common actions (ex. allow, intercept, service chain, egress).
+  - Minimally create a normal "intercept" topology and a separate "bypass" topology:
+  
+    Intercept topology:
+      - L3 explicit proxy topology configuration, normal topology settings, SSL config, services, service chain
+      - No security policy rules - just a single ALL rule with TLS intercept action (and service chain)
+      - Attach to a "dummy" VLAN
+
+    Bypass topology:
+      - L3 explicit proxy topology configuration, skip SSL config, re-use services, service chains
+      - No security policy rules - just a single ALL rule with TLS bypass action (and service chain)
+      - Attached to a separate "dummy" VLAN
+
+  - Create any additional explicit proxy topologies as required, as separate functions based on discrete actions (allow/block, intercept/bypass, service chain, egress)
+
+- **Step 4**: Import the traffic switching iRule
+  - Set necessary static configuration values in RULE_INIT as required
+  - Define any URL category lists in RULE_INIT as required (see example). Use the following command to get a list of URL categories:
+
+    `tmsh list sys url-db url-category |grep "sys url-db url-category " |awk -F" " '{print $4}'`
+
+- **Step 5**: Create a client-facing topology switching VIP
+  - Type: Standard
+  - Source: 0.0.0.0/0
+  - Destination: enter the client-facing explicit proxy IP (what the client will be configured to talk to)
+  - Service Port: enter the explicit proxy listening port. This must be the same as the listening port defined in the topologies (ex. 3128, 8080).
+  - Configuration : HTTP Profile (client): select the "sslo-default-http-explicit" profile
+  - Configuration : VLAN and Tunnel Traffic: select **Enabled on...** and select the client-facing VLAN
+  - Configuration : Address Translation: disabled
+  - Configuration : Port Translation: disabled
+  - iRule: traffic switching iRule
+
+- **Step 6**: modify the traffic switching iRule with the required detection commands. See **Traffic Selector commands - Explicit Proxy** information below.
+
+--------------------------------------------------
 
 ### Traffic selector commands - Transparent Proxy (to be used in traffic switching iRule)
 - Call the "target" proc with the following parameters ([topology name], ${sni}, [message])
@@ -223,3 +270,54 @@ In this scenario, an explicit proxy configuration is built up front at the steer
 
       Combinations: above selectors can be used in combinations as required. Example:
          if { ([call SSLOLIB::SRCIP IP:10.1.0.0/16]) and ([call SSLOLIB::DSTIP IP:93.184.216.34]) }
+         
+--------------------------------------------------
+
+### Traffic selector commands - Explicit Proxy (to be used in traffic switching iRule)
+- Call the "target" proc with the following parameters ([topology name], ${sni}, [message])
+  - **[topology name]** is the base name of the defined topology
+  - **${host}** is static here and returns the server name indication value (SNI) for logging
+  - **[message]** is any string message to send to the log (ex. which rule matched)
+  - **return** is added at the end of each command to cancel any further matching
+  - Example: 
+    `call SSLOLIBEXP::target "bypass" ${host} "SRCIP"`
+
+- Use the following commands to query the proc function for matches (all return true or false)
+    All commands run in HTTP_PROXY_REQUEST to act on explicit proxy requests.
+
+      Source IP Detection (static IP, IP subnet, data group match)
+         SRCIP IP:<ip/subnet>
+         SRCIP DG:<data group name> (address-type data group)
+         if { [call SSLOLIBEXP::SRCIP IP:10.1.0.0/16] } { call SSLOLIBEXP::target "topology name" ${host} "SRCIP" ; return }
+         if { [call SSLOLIBEXP::SRCIP DG:my_sip_list] } { call SSLOLIBEXP::target "topology name" ${host} "SRCIP" ; return }
+ 
+      Source Port Detection (static port, port range, data group match)
+         SRCPORT PORT:<port/port-range>
+         SRCPORT DG:<data group name> (integer-type data group)
+         if { [call SSLOLIBEXP::SRCPORT PORT:15000] } { call SSLOLIBEXP::target "topology name" ${host} "SRCPORT" ; return }
+         if { [call SSLOLIBEXP::SRCPORT PORT:1000-60000] } { call SSLOLIBEXP::target "topology name" ${host} "SRCPORT" ; return }
+         if { [call SSLOLIBEXP::SRCPORT DG:my-sport-list] } { call SSLOLIBEXP::target "topology name" ${host} "SRCPORT" ; return }
+ 
+      Destination IP Detection (static IP, IP subnet, data group match)
+         DSTIP IP:<ip/subnet>
+         DSTIP DG:<data group name> (address-type data group)
+         if { [call SSLOLIBEXP::DSTIP IP:93.184.216.34] } { call SSLOLIBEXP::target "topology name" ${host} "DSTIP" ; return }
+         if { [call SSLOLIBEXP::DSTIP DG:my-dip-list] } { call SSLOLIBEXP::target "topology name" ${host} "DSTIP" ; return }
+
+      HOST Detection (static URL, category match, data group match)
+         HOST URL:<static url>
+         HOST URLGLOB:<static url> (ends_with match)
+         if { [call SSLOLIBEXP::HOST URL:www.example.com] } { call SSLOLIBEXP::target "topology name" ${host} "HOSTURL" ; return }
+         if { [call SSLOLIBEXP::HOST URLGLOB:.example.com] } { call SSLOLIBEXP::target "topology name" ${host} "HOSTURLGLOB" ; return }
+
+         HOST CAT:<category name or list of categories>
+         if { [call SSLOLIBEXP::HOST CAT:/Common/Financial_Data_and_Services] } { call SSLOLIBEXP::target "topology name" ${host} "HOSTCAT" ; return }
+         if { [call SSLOLIBEXP::HOST CAT:$static::URLCAT_Finance_Health] } { call SSLOLIBEXP::target "topology name" ${host} "HOSTCAT" ; return }
+    
+         HOST DG:<data group name> (string-type data group)
+         HOST DGGLOB:<data group name> (ends_with match)
+         if { [call SSLOLIBEXP::HOST DG:my-sni-list] } { call SSLOLIBEXP::target "topology name" ${host} "HOSTDG" ; return }
+         if { [call SSLOLIBEXP::HOST DGGLOB:my-sniglob-list] } { call SSLOLIBEXP::target "topology name" ${host} "HOSTDGGLOB" ; return }
+
+      Combinations: above selectors can be used in combinations as required. Example:
+         if { ([call SSLOLIBEXP::SRCIP IP:10.1.0.0/16]) and ([call SSLOLIBEXP::DSTIP IP:93.184.216.34]) }
