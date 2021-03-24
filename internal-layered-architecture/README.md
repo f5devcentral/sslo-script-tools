@@ -7,7 +7,37 @@ A set of iRules for creating a layered SSL Orchestrator, to reduce complexity by
 ### Version support
 This utility works on BIG-IP 14.1 and above, SSL Orchestrator 5.x to 8.x.
 
+### Description:
+The SSL Orchestrator Internal Layered Architecture pattern is designed to both simplify configuration and management, and expand the capabilities of an SSL Orchestrator deployment. Far too often these configurations can get complex, where large security policies or multiple topologies are required to satisfy different traffic pattern needs. Or, a configuration may require non-strict changes that later make management and upgrades challenging. Consider however, that across multiple security rules and multiple topologies, there are basically FOUR actions that are performed for any traffic pattern:
+
+  - Allow / block
+  - TLS intercept / bypass
+  - Service chain assignment
+  - Egress path
+
+The Internal Layered Architecture pattern simplifies the architecture by reducing a topology to a single "function" as a combination of these FOUR actions, and pushing policy steering to a frontend virtual server.
+
+![SSL Orchestrator Internal Layered Architecture](images/sslo-internal-layered-architecture.png)
+
+This pattern has the following additional advantages:
+
+  - The steering policy runs on a pure BIG-IP LTM virtual server, so is infinitely flexible and automatable.
+  - Topology functions are simplified and require no or minimal customization.
+  - Topology objects are re-usable (ex. SSL configurations, services), further reducing object counts.
+  - Topology functions support an additional "dynamic egress" pattern, where different egress setting can be selected per topology.
+  - Topology functions support more flexible bypass options.
+  - Topology functions support more flexible automation and management
+
+This repo is dedicated to a set of tooling to make this architecture pattern easier to implement and manage, including a library iRule that greatly simplifies traffic matching and steering.
+
 ### How to install 
+While the Internal Layered Architecture can be used in any direction, it is most useful in a forward proxy scenario. The following specifically addresses layer 3 forward proxy use cases, but it is also possible to do in a layer 2 "vwire" configuration. Within the layer 3 forward proxy scenarios, there are three options:
+
+  - Transparent forward proxy
+  - Explicit forward proxy (proxy in front)
+  - Explicit forwward proxy (proxy in back)
+
+## Transparent Forward Proxy
 - **Step 1**: Import this SSLOLIB iRule (name "SSLOLIB")
 
 - **Step 2**: Build a set of "dummy" VLANs. A topology must be bound to a unique VLAN. But since the topologies in this architecture won't be listening on an actual client-facing VLAN, you will need to create a separate dummy VLAN for each topology you intend to create. A dummy VLAN is basically a VLAN with no interface assigned. In the BIG-IP UI, under Network -> VLANs, click Create. Give your VLAN a name and click Finished. It will ask you to confirm since you're not attaching an interface. Click OK to continue. Repeat this step by creating unique VLAN names for each topology you are planning to use.
