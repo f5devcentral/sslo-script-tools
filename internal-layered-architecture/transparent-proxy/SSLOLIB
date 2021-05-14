@@ -101,6 +101,8 @@ proc errorlog {message} {
     }
 }
 proc target {topology {sni ""} {message ""}} {
+    sharedvar SNI
+    set SNI ${sni}
     virtual "/Common/sslo_${topology}.app/sslo_${topology}-in-t-4"
     if { ( $static::SSLODEBUG ) and ( ${sni} ne "" ) and ( ${message} ne "" ) } {
         log -noname local0. "SSLO Switch Log :: [IP::client_addr]:[TCP::client_port] -> [IP::local_addr]:[TCP::local_port] :: (${sni}) :: Match on ${message} :: Sending to ${topology}"
