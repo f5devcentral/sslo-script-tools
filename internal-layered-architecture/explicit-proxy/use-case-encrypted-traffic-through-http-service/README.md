@@ -7,83 +7,48 @@ SSL Orchestrator employs "flow signaling" to maintain traffic context through th
 
 The following use case describes an alternate method for passing encrypted traffic to an HTTP proxy service, by using the Internal Layered Architecture and egress proxy chaining. The layered steering VIP, per policy, will steer traffic to an internal TLS bypass SSL Orchestrator topology. That topology will be configured to proxy chain out to the HTTP proxy service (looping back into the service chain). A separate "control channel" virtual server is then established to catch the HTTPS traffic leaving the proxy service, to send direct to egress.
 
-
-
-The steps are as follows:
-
-- Create a "client" iRule that will be attached to an SSL Orchestrator topology. This iRule will override normal outbound routing and force traffic to a "shim" virtual server.
-- Create a "server" iRule that will attached to the shim virtual server. This iRule will handle the conversion of encrypted routed traffic to an explicit proxy communication.
-- Create a "shim" virtual server that will sit between an SSL Orchestrator egress path and the upstream explicit proxy.
-
 ![SSL Orchestrator Internal Layered Architecture](../../images/sslo-encrypted-traffic-to-proxy.png)
 
-### Create the Client iRule
-- Under Local Traffic -> iRules, click Create and import the **client-rule** under the **transparent-to-explicit-egress** folder.
-- In the RULE_INIT section of the iRule, change the static::PROXY_CHAIN_VIP value to point to the shim virtual server name.
+Traffic destined for TLS interception is steered to an intercept topology by the layered virtual server, and then egresses the normal routed path. Decrypted traffic to the service chain will flow through all of the defined services here, including the proxy service. Traffic destined for TLS bypass is steered to the bypass topology, which is then configured to proxy chain to the proxy service, looping back into the service chain. The SSL Orchestrator service chain would not accept this traffic, so a separate "control channel" virtual catches any HTTPS (port 443) traffic leaving the proxy service, directing that to the routed egress path.
+
+The steps to configure this are as follows:
+
+- Deploy an Internal Layered Architecture "Proxy in Back" configuration
+- Create any SSL Orchestrator TLS intercept topologies as required, define services and service chains
+- Create a new proxy service pool
+- Create a TLS bypass topology and configure Proxy Connect to the proxy service
+- Create a service control channel virtual server
+
+### Deploy an Internal Layered Architecture "Proxy in Back" configuration
+- Use the explicit proxy "Proxy in Back" configuration, as detailed on the main page, to establish an explicit proxy internal layered architecture.
 
 
-### Create the Server iRule
-- Under Local Traffic -> iRules, click Create and import the **server-rule** under the **transparent-to-explicit-egress** folder.
+### Create any SSL Orchestrator TLS intercept topologies as required, define services and service chains
+- In the SSL Orchestrator UI, create any internal TLS intercept topologies as required. Define the services and service chains here.
 
 
-### Create the upstream proxy pool
-- Under Local Traffic -> Pools, create a pool that points to the upstream proxy resource.
+### Create a new proxy service pool
+- Under Local Traffic -> Pools, create a new pool that points to the explicit proxy service listener IP:port. This will be the same IP and port defined for the proxy service in the SSL Orchestrator service configuration.
 
 
-### Create the Shim Virtual Server
-- Under Local Traffic -> Virtual Servers, create a virtual server:
+### Create a TLS bypass topology and configure Proxy Connect to the proxy service
+- In the SSL Orchestrator UI, create a TLS bypass topology. On the Security Policy page, enable **Proxy Connect** and select the new proxy service pool.
+
+
+### Create a service control channel virtual server
+- Under Local Traffic -> Virtual Servers, create a new virtual server:
   - Source: 0.0.0.0/0
   - Destination: 0.0.0.0/0
-  - Service Port: 0
-  - HTTP Profile: http
-  - VLAN: enabled and nothing selected
-  - SNAT: enable as required to communicate with the upstream proxy
-  - Address Translation: enabled
-  - Port Translation: enabled
-  - Pool: upstream proxy pool
-  - iRule: Select the Server iRule
+  - Port: 443
+  - VLAN: enable and select the proxy service's "from-service" VLAN as defined in the SSL Orchestrator service configuration
+  - Address Translation: disabled
+  - Port Translation: disabled
+  - Pool: select an existing or create a new pool that points to the routed gateway (the same that the TLS intercept topology uses)
 
 
-### Add the client rule to an SSL Orchestrator topology
-- In the SSL Orchestrator UI, under the Interception Rules tab, select the "-in-t-" interception rule corresponding to the internal topology that requires explicit proxy egress. At the bottom of this page, select the **Client** iRule, then re-deploy.
+Note that the control channel virtual service listens on the proxy service's "from-service" VLAN. SSL Orchestrator defines a wildcard 0.0.0.0/0:0) virtual server on this same VLAN, so the control channel listens on a **more specific** traffic flow (port 443). Any traffic leaving the HTTP proxy service inside the service chain of a TLS intercept topology would normally be HTTP port 80. You don't have use a specific port here though. In fact, if your proxy device is capable of enabling and disabling source address translation (i.e. SNAT, or "client IP reflection") based on local policy, you could configure that proxy device to SNAT (use its own IP for HTTPS traffic), and not SNAT (enable client IP reflection) for HTTP traffic. In this case, the control channel virtual server could be configured to instead listen on the proxy service's self-IP as the source of traffic. This would also be useful for allowing the HTTP proxy service to reach out to Internet sites (from its own IP address), for example to reach a licensing or subscription update service.
 
 
-### Create internal SSL Orchestrator topologies and configure the layered steering policy as required
-- Using this Internal Layered Architecture design, create any number of internal SSL Orchestrator topologies. Example:
-  - intercept_direct  (TLS intercept and routed egress)
-  - intercept_proxy   (TLS intercept and upstream proxy egress)
-  - bypass_direct     (TLS bypass and routed egress)
-  - bypass_proxy      (TLS bypass and upstream proxy egress)
-- Define the steering policy iRule to send traffic to one of the above topologies as required. Example:
-
-```
-when RULE_INIT {
-    ## User-defined: DEBUG logging flag (1=on, 0=off)
-    set static::SSLODEBUG 0
-
-    ## User-defined: Default topology if no rules match (the topology name as defined in SSLO)
-    set static::default_topology "intercept_proxy"
-
-    ## User-defined: URL category list (create as many lists as required)
-    set static::URLCAT_Finance_Health {
-        /Common/Financial_Data_and_Services
-        /Common/Health_and_Medicine
-    }
-}
-when CLIENTSSL_CLIENTHELLO {
-
-    ## set local sni variable (for logging)
-    set sni ""
-
-    ## Standard certificate Pinners bypass rule (specify your bypass topology)
-    if { [call SSLOLIB::SNI CAT:/Common/sslo-urlCatPinners] } { call SSLOLIB::target "intercept_direct" ${sni} "pinners" ; return}
-
-    ################################
-    #### SNI CONDITIONS GO HERE ####
-    ################################
-    if { [call SSLOLIB::SNI CAT:$static::URLCAT_Finance_Health] } { call SSLOLIB::target "bypass_proxy" ${sni} "SNICAT" ; return }
-}
-```
 
 
 
