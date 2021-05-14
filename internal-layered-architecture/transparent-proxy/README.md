@@ -11,6 +11,20 @@ In this scenario, clients egress through a transparent proxy solution but may ne
 
 ![SSL Orchestrator Internal Layered Architecture](../images/sslo-tp-to-ep-layered.png)
 
+--------------------------------------------------
+### Create the Client iRule
+
+
+--------------------------------------------------
+### Create the Server iRule
+
+
+--------------------------------------------------
+### Create the Shim Virtual Server
+
+
+--------------------------------------------------
+### Create a steering policy
 
 
 
