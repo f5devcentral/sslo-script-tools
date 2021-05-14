@@ -9,7 +9,7 @@ In this scenario, clients egress through a transparent proxy solution but may ne
 - Create a "server" iRule that will attached to the shim virtual server. This iRule will handle the conversion of encrypted routed traffic to an explicit proxy communication.
 - Create a "shim" virtual server that will sit between an SSL Orchestrator egress path and the upstream explicit proxy.
 
-![SSL Orchestrator Internal Layered Architecture](../images/sslo-internal-layered-architecture.png)
+![SSL Orchestrator Internal Layered Architecture](../images/sslo-tp-to-ep-layered.png)
 
 
 
