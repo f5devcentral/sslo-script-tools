@@ -1,235 +1,89 @@
-when CLIENT_ACCEPTED {
-    ## Start with HTTP disabled
-    HTTP::disable
+# F5 SSL Orchestrator Layered Architecture Configuration
+# Explicit Proxy Configuration Use Cases
+This section defines use cases specific to an explicit forward proxy implementation using the layered architecture
 
-    set THIS_POOL [LB::server pool]
+## Encrypted Traffic to an HTTP Proxy Service:
+SSL Orchestrator employs "flow signaling" to maintain traffic context through the dynamic service chain. As a flow leaves the BIG-IP for an inline security service, its flow information is recorded (src+dst IP:port) so that when it returns from the service, context can be re-established. An inline HTTP proxy service, however, will always minimally change the source port, thus breaking the flow signal. For this reason, and to support HTTP proxy services in the dynamic service chain, SSL Orchestrator uses an HTTP header signal through this device type. This also requires that signaling through a proxy service can only happen for unencrypted/decrypted HTTP traffic. As an HTTP header cannot be injected into TLS bypassed connections, SSL Orchestrator will bypass any proxy service in the service chain for TLS bypassed traffic. 
 
-    ## Set the option and detect_handshake flags
-    set option 0
-    set detect_handshake 1
+The following use case describes an alternate method for passing encrypted traffic to an HTTP proxy service, by using the Internal Layered Architecture and egress proxy chaining. The layered steering VIP, per policy, will steer traffic to an internal TLS bypass SSL Orchestrator topology. That topology will be configured to proxy chain out to the HTTP proxy service (looping back into the service chain). A separate "control channel" virtual server is then established to catch the HTTPS traffic leaving the proxy service, to send direct to egress.
 
-    ## Collect sharedvar variables
-    sharedvar ctx
-    sharedvar SEND_SNI
 
-    ## Collect the request payload -> trigger CLIENT_DATA
-    TCP::collect
-}
-when CLIENT_DATA {
-    ## Collect SNI from caller (sharedvar or binary parse)
-    set SNI ""
-    if { [info exists SEND_SNI] } { 
-        ## fetch SNI from client rule (sharedvar)
-        set SNI ${SEND_SNI}
-    } else {
-        ## no SNI provided, binary parse TLS ClientHello (22) to get SNI
-        binary scan [TCP::payload] c type
-        if { ${type} == 22 } {
-            set option 1
 
-            ## Store the original payload
-            binary scan [TCP::payload] H* orig
-    
-            ## Check for a properly formatted handshake request
-            if { [binary scan [TCP::payload] cSS tls_xacttype tls_version tls_recordlen] < 3 } {
-                reject
-                return
-            }
+The steps are as follows:
 
-            switch $tls_version {
-                "769" -
-                "770" -
-                "771" {
-                    if { ($tls_xacttype == 22) } {
-                        binary scan [TCP::payload] @5c tls_action
-                        if { not (($tls_action == 1) && ([TCP::payload length] > $tls_recordlen)) } { set detect_handshake 0 }
-                    }
-                }
-                "768" { set detect_handshake 0 }
-                default { set detect_handshake 0 }
-            }
+- Create a "client" iRule that will be attached to an SSL Orchestrator topology. This iRule will override normal outbound routing and force traffic to a "shim" virtual server.
+- Create a "server" iRule that will attached to the shim virtual server. This iRule will handle the conversion of encrypted routed traffic to an explicit proxy communication.
+- Create a "shim" virtual server that will sit between an SSL Orchestrator egress path and the upstream explicit proxy.
 
-            if { ($detect_handshake) } {
-                # skip past the session id
-                set record_offset 43
-                binary scan [TCP::payload] @${record_offset}c tls_sessidlen
-                set record_offset [expr {$record_offset + 1 + $tls_sessidlen}]
+![SSL Orchestrator Internal Layered Architecture](../../images/sslo-encrypted-traffic-to-proxy.png)
 
-                # skip past the cipher list
-                binary scan [TCP::payload] @${record_offset}S tls_ciphlen
-                set record_offset [expr {$record_offset + 2 + $tls_ciphlen}]
+### Create the Client iRule
+- Under Local Traffic -> iRules, click Create and import the **client-rule** under the **transparent-to-explicit-egress** folder.
+- In the RULE_INIT section of the iRule, change the static::PROXY_CHAIN_VIP value to point to the shim virtual server name.
 
-                # skip past the compression list
-                binary scan [TCP::payload] @${record_offset}c tls_complen
-                set record_offset [expr {$record_offset + 1 + $tls_complen}]
 
-                # check for the existence of ssl extensions
-                if { ([TCP::payload length] > $record_offset) } {
-                    # skip to the start of the first extension
-                    binary scan [TCP::payload] @${record_offset}S tls_extenlen
-                    set record_offset [expr {$record_offset + 2}]
-                    # read all the extensions into a variable
-                    binary scan [TCP::payload] @${record_offset}a* tls_extensions
+### Create the Server iRule
+- Under Local Traffic -> iRules, click Create and import the **server-rule** under the **transparent-to-explicit-egress** folder.
 
-                    # for each extension
-                    for { set ext_offset 0 } { $ext_offset < $tls_extenlen } { incr ext_offset 4 } {
-                        binary scan $tls_extensions @${ext_offset}SS etype elen
-                        if { ($etype == 0) } {
-                            # if it's a servername extension read the servername
-                            set grabstart [expr {$ext_offset + 9}]
-                            set grabend [expr {$elen - 5}]
-                            binary scan $tls_extensions @${grabstart}A${grabend} tls_servername_orig
-                            set tls_servername [string tolower ${tls_servername_orig}]
-                            set ext_offset [expr {$ext_offset + $elen}]
-                            break
-                        } else {
-                            # skip over other extensions
-                            set ext_offset [expr {$ext_offset + $elen}]
-                        }
-                    }
-                }
-            }
-            if { [info exists tls_servername] } {
-                set SNI ${tls_servername}
-            }
-        }
-    }
-        
-    if { $ctx(ptcl) eq "https" } {
-        if { ${SNI} ne "" } {
-            ## HTTPS proxy chaining can only work if the request contains an SNI
-            set option 1
 
-            ## Store the original payload (would normally be the client TLS handshake)
-            binary scan [TCP::payload] H* orig
+### Create the upstream proxy pool
+- Under Local Traffic -> Pools, create a pool that points to the upstream proxy resource.
 
-            ## Point the traffic to the proxy server
-            pool ${THIS_POOL}
 
-            # Drop the client handshake
-            TCP::payload replace 0 [TCP::payload length] ""
+### Create the Shim Virtual Server
+- Under Local Traffic -> Virtual Servers, create a virtual server:
+  - Source: 0.0.0.0/0
+  - Destination: 0.0.0.0/0
+  - Service Port: 0
+  - HTTP Profile: http
+  - VLAN: enabled and nothing selected
+  - SNAT: enable as required to communicate with the upstream proxy
+  - Address Translation: enabled
+  - Port Translation: enabled
+  - Pool: upstream proxy pool
+  - iRule: Select the Server iRule
 
-            # Form up the CONNECT call
-            set px_connect "CONNECT ${SNI}:[TCP::local_port] HTTP/1.1\r\n\r\n"
 
-            # Send the CONNECT
-            TCP::payload replace 0 0 $px_connect
-            TCP::release
-        } elseif { ${SNI} eq "" } {
-            ## HTTPS proxy chaining must fail without an SNI
-            reject
-            return
-        }
-	} elseif { $ctx(ptcl) eq "http" } {
-	    ## Enable HTTP processing
-	    HTTP::enable
-	    TCP::release
-	} else {
-	    reject
-	    return
-	}
-}
-when HTTP_REQUEST {
-    if { [HTTP::header exists Host] } {
-        set http_hostname [HTTP::host]
-    } else {
-        set http_hostname [IP::local_addr]:[TCP::local_port]
-    }
+### Add the client rule to an SSL Orchestrator topology
+- In the SSL Orchestrator UI, under the Interception Rules tab, select the "-in-t-" interception rule corresponding to the internal topology that requires explicit proxy egress. At the bottom of this page, select the **Client** iRule, then re-deploy.
 
-    ## Point the traffic to the proxy server
-    pool ${THIS_POOL}
 
-    # Rewrite to proxified HTTP request
-    HTTP::uri "http://${http_hostname}:[TCP::local_port][HTTP::uri]"
-}
-when HTTP_RESPONSE priority 300 {
-    switch -glob -- [HTTP::status] {
-        "2*" -
-        "3*" {
-            # drop the proxy status and replay the original handshake
-        }
-        "400" {
-            # Bad Request
-            reject
-            return
-        }
-        "403" {
-            # Forbidden
-            reject
-            return
-        }
-        "407" {
-            # stub for when authentication is required
-            HTTP::header replace ":S" "401 Unauthorized"
-        }
-        "502" {
-            # Bad Gateway (proxy error)
-            reject
-            return
-        }
-        "503" {
-            # Service Unavailable
-            reject
-            return
-        }
-        "504" {
-            # Gateway Timeout
-            reject
-            return
-        }
-        default {
-            reject
-            return
-        }
+### Create internal SSL Orchestrator topologies and configure the layered steering policy as required
+- Using this Internal Layered Architecture design, create any number of internal SSL Orchestrator topologies. Example:
+  - intercept_direct  (TLS intercept and routed egress)
+  - intercept_proxy   (TLS intercept and upstream proxy egress)
+  - bypass_direct     (TLS bypass and routed egress)
+  - bypass_proxy      (TLS bypass and upstream proxy egress)
+- Define the steering policy iRule to send traffic to one of the above topologies as required. Example:
+
+```
+when RULE_INIT {
+    ## User-defined: DEBUG logging flag (1=on, 0=off)
+    set static::SSLODEBUG 0
+
+    ## User-defined: Default topology if no rules match (the topology name as defined in SSLO)
+    set static::default_topology "intercept_proxy"
+
+    ## User-defined: URL category list (create as many lists as required)
+    set static::URLCAT_Finance_Health {
+        /Common/Financial_Data_and_Services
+        /Common/Health_and_Medicine
     }
 }
-when SERVER_CONNECTED priority 900 {
-    ## Only do this for TLS traffic
-    if { ${option} } {
-        TCP::collect 12
-    }
+when CLIENTSSL_CLIENTHELLO {
+
+    ## set local sni variable (for logging)
+    set sni ""
+
+    ## Standard certificate Pinners bypass rule (specify your bypass topology)
+    if { [call SSLOLIB::SNI CAT:/Common/sslo-urlCatPinners] } { call SSLOLIB::target "intercept_direct" ${sni} "pinners" ; return}
+
+    ################################
+    #### SNI CONDITIONS GO HERE ####
+    ################################
+    if { [call SSLOLIB::SNI CAT:$static::URLCAT_Finance_Health] } { call SSLOLIB::target "bypass_proxy" ${sni} "SNICAT" ; return }
 }
-when SERVER_DATA priority 900 {
-    switch -glob -- [TCP::payload] {
-        "HTTP/1.[01] 200*" {
-            # drop the proxy status and replay the original handshake
-            TCP::payload replace 0 [TCP::payload length] ""
-            TCP::respond [binary format H* $orig]
-        }
-        "HTTP/1.[01] 400*" {
-            # Bad Request
-            reject
-            return
-        }
-        "HTTP/1.[01] 403*" {
-            # Forbidden
-            reject
-            return
-        }
-        "HTTP/1.[01] 407*" {
-            # stub for when authentication is required
-            reject
-            return
-        }
-        "HTTP/1.[01] 502*" {
-            # Bad Gateway (proxy error)
-            reject
-            return
-        }
-        "HTTP/1.[01] 503*" {
-            # Service Unavailable
-            reject
-            return
-        }
-        "HTTP/1.[01] 504*" {
-            # Gateway Timeout
-            reject
-            return
-        }
-        default {
-            reject
-            return
-        }
-    }
-    TCP::release
-}
+```
+
+
+
