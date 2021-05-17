@@ -35,12 +35,12 @@ The steps to configure this are as follows:
 
 
 ### Create a "client" iRule that will be attached to an SSL Orchestrator bypass topology. This iRule will override normal outbound routing and force traffic to a "shim" virtual server.
-- Under Local Traffic -> iRules, click Create and import the client-rule under the use-case-transparent-to-explicit-egress folder.
+- Under Local Traffic -> iRules, click Create and import the client-rule under the **use-case-transparent-to-explicit-egress** folder.
 - In the RULE_INIT section of the iRule, change the static::PROXY_CHAIN_VIP value to point to the shim virtual server name.
 
 
 ### Create a "server" iRule that will attached to the shim virtual server. This iRule will handle the conversion of encrypted routed traffic to an explicit proxy communication.
-- Under Local Traffic -> iRules, click Create and import the server-rule under the use-case-transparent-to-explicit-egress folder.
+- Under Local Traffic -> iRules, click Create and import the server-rule under the **use-case-transparent-to-explicit-egress** folder.
 
 
 ### Create a "shim" virtual server that will sit between an SSL Orchestrator egress path and the upstream explicit proxy.
