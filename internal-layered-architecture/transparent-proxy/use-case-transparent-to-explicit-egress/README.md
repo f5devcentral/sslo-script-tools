@@ -12,12 +12,12 @@ In this scenario, clients egress through a transparent proxy solution but may ne
 ![SSL Orchestrator Internal Layered Architecture](../../images/sslo-tp-to-ep-layered.png)
 
 ### Create the Client iRule
-- Under Local Traffic -> iRules, click Create and import the **client-rule** under the **transparent-to-explicit-egress** folder.
+- Under Local Traffic -> iRules, click Create and import the **client-rule** under the **use-case-transparent-to-explicit-egress** folder.
 - In the RULE_INIT section of the iRule, change the static::PROXY_CHAIN_VIP value to point to the shim virtual server name.
 
 
 ### Create the Server iRule
-- Under Local Traffic -> iRules, click Create and import the **server-rule** under the **transparent-to-explicit-egress** folder.
+- Under Local Traffic -> iRules, click Create and import the **server-rule** under the **use-case-transparent-to-explicit-egress** folder.
 
 
 ### Create the upstream proxy pool
