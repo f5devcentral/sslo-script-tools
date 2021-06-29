@@ -73,7 +73,8 @@ In a transparent forward proxy, the steering VIP and SSL Orchestrator topologies
   - Destination: 0.0.0.0/0:0
   - Protocol: TCP
   - VLAN: client-facing VLAN
-  - Address/Port Translation: disabled
+  - Address Translation: disabled
+  - Port Translation: disabled
   - Default Persistence Profile: ssl
   - iRule: traffic switching iRule
 
@@ -115,6 +116,7 @@ In this scenario, an explicit proxy configuration is built up front at the steer
   - Configuration : VLAN and Tunnel Traffic: select **Enabled on...** and select the previously-created TCP tunnel
   - Address Translation: disabled
   - Port Translation: disabled
+  - Default Persistence Profile: ssl
   - Click **Finished**
 
 - **Step 5**: Create a tunneling iRule. The tunneling iRule is used on the HTTP explicit VIP to ensure unencrypted HTTP proxy requests also flow through the TCP tunnel. Under Local Traffic -> iRules, click **Create**
