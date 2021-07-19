@@ -1,6 +1,6 @@
 ## SSL Orchestrator Use Case: Internal Layered Architecture - Client-Facing Switching iRule
-## Version: 2.0
-## Date: 2020-11-30
+## Version: 2.2
+## Date: 2021-07-19
 ## Author: Kevin Stewart, F5 Networks
 ## Configuration: see SSLOLIB iRule for build instructions
 
@@ -27,7 +27,10 @@ when RULE_INIT {
     }
 }
 when CLIENTSSL_CLIENTHELLO {
-    ## set local sni variable (for logging)
+    ## Do not edit
+    set cmd "catch { HTTP::disable }" ; eval ${cmd}
+    
+    ## Set local sni variable (for logging)
     set sni ""
 
     ## Standard certificate Pinners bypass rule (specify your bypass topology)
