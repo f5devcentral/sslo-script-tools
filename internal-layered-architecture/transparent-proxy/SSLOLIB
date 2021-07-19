@@ -1,7 +1,13 @@
 ## SSL Orchestrator Use Case: Internal Layered Architecture - SSLOLIB Traffic Matching Library
-## Version: 2.1
-## Date: 2020-12-15
+## Version: 2.2
+## Date: 2021-07-19
 ## Author: Kevin Stewart, F5 Networks
+##
+## Updates:
+##      2.0: Updated SNI:CAT re-uses existing category lookup results
+##      2.1: Updated SNI:CAT test and don't fail if URLDB is not provisioned
+##      2.2: Updated SNI:CAT update to support custom categories only when URLDB not provisioned
+##      2.2: Added HOST proc
 ##
 ## Configuration:
 ##  - Step 1: Import this SSLOLIB iRule (name "SSLOLIB")
@@ -46,7 +52,7 @@
 ##           call SSLOLIB::target "bypass" ${sni} "SRCIP"
 ##
 ##  - Use the following commands to query the proc function for matches (all return true or false)
-##    All commands run in CLIENTSSL_CLIENTHELLO to act on SSL traffic
+##    The following commands run in CLIENTSSL_CLIENTHELLO to act on SSL traffic
 ##
 ##      Source IP Detection (static IP, IP subnet, data group match)
 ##         SRCIP IP:<ip/subnet>
@@ -92,6 +98,24 @@
 ##      Combinations: above selectors can be used in combinations as required. Example:
 ##         if { ([call SSLOLIB::SRCIP IP:10.1.0.0/16]) and ([call SSLOLIB::DSTIP IP:93.184.216.34]) }
 ##
+##
+##  - It is also possible to add an HTTP_REQUEST event and (client) HTTP profile to act on the HTTP Host header of unencrypted HTTP requests
+##
+##      HOST Detection (static URL, category match, data group match)
+##         HOST URL:<static url>
+##         HOST URLGLOB:<static url> (ends_with match)
+##         if { [call SSLOLIB::HOST URL:www.example.com] } { call SSLOLIB::target "topology name" ${host} "HOSTURL" ; return }
+##         if { [call SSLOLIB::HOST URLGLOB:.example.com] } { call SSLOLIB::target "topology name" ${host} "HOSTURLGLOB" ; return }
+##
+##         HOST CAT:<category name or list of categories>
+##         if { [call SSLOLIB::HOST CAT:/Common/Financial_Data_and_Services] } { call SSLOLIB::target "topology name" ${host} "HOSTCAT" ; return }
+##         if { [call SSLOLIB::HOST CAT:$static::URLCAT_Finance_Health] } { call SSLOLIB::target "topology name" ${host} "HOSTCAT" ; return }
+##    
+##         HOST DG:<data group name> (string-type data group)
+##         HOST DGGLOB:<data group name> (ends_with match)
+##         if { [call SSLOLIB::HOST DG:my-sni-list] } { call SSLOLIB::target "topology name" ${host} "HOSTDG" ; return }
+##         if { [call SSLOLIB::HOST DGGLOB:my-sniglob-list] } { call SSLOLIB::target "topology name" ${host} "HOSTDGGLOB" ; return }
+
 ## DO NOT MODIFY BELOW ##
 ## SSLOLIB library functions perform error detection and will return 0 (false) in any reasonable error condition (ex. incorrect data group name).
 
@@ -136,6 +160,21 @@ proc DSTPORT { arg } {
         "DG" { if { [catch { set res [expr { [class match -- [TCP::local_port] equals [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
     }
 }
+proc HOST { arg } {
+    upvar host s_host
+    upvar cat catg
+    set s_host [HTTP::host]
+    if { ${s_host} != "" } {
+        set arglist [split ${arg} ":"]
+        switch -- [lindex ${arglist} 0] {
+            "URL" { return [expr { ${s_host} eq [lindex ${arglist} 1] } ? 1 : 0] }
+            "URLGLOB" { return [expr { ${s_host} ends_with [lindex ${arglist} 1] } ? 1 : 0] }
+            "CAT" { if { [info exists catg] } { if { [catch { set match 0 ; foreach cat ${catg} { if { [lsearch -exact [lindex ${arglist} 1] ${cat}] >= 0 } { set match 1 }} ; set res [expr { ${match} } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } } else { set URLF "CATEGORY\x3a\x3alookup" ; set test [catch "${URLF} https://${s_host}/ request_default_and_custom" catg] ; if { ${catg} contains "Categorization engine returned an error" } { set test [catch "${URLF} https://${s_host}/ custom" catg] } ; if { ![llength ${catg}] } { return 0 } else { if { [catch { set match 0 ; foreach cat ${catg} { if { [lsearch -exact [lindex ${arglist} 1] ${cat}] >= 0 } { set match 1 } } ; set res [expr { ${match} } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} }}}}
+            "DG" { if { [catch { set res [expr { [class match -- ${s_host} equals [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+            "DGGLOB" { if { [catch { set res [expr { [class match -- ${s_host} ends_with [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+        }
+    } else { return 0 }
+}
 proc SNI { arg } {
     upvar sni s_sni
     upvar cat catg
@@ -147,12 +186,7 @@ proc SNI { arg } {
         switch -- [lindex ${arglist} 0] {
             "URL" { return [expr { ${s_sni} eq [lindex ${arglist} 1] } ? 1 : 0] }
             "URLGLOB" { return [expr { ${s_sni} ends_with [lindex ${arglist} 1] } ? 1 : 0] }
-            "CAT" { 
-                ## optimization 2.0: re-uses existing category lookup results
-                ## optimization 2.1: test and don't fail if URLDB is not provisioned
-                if { [info exists catg] } { if { [catch { set match 0 ; foreach cat ${catg} { if { [lsearch -exact [lindex ${arglist} 1] ${cat}] >= 0 } { set match 1 }} ; set res [expr { ${match} } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } } else { set URLF "CATEGORY\x3a\x3alookup" ; if { [catch "${URLF} https://${s_sni}/ request_default_and_custom" catg] || ![llength ${catg}] } { return 0 } else { if { [catch { set match 0 ; foreach cat ${catg} { if { [lsearch -exact [lindex ${arglist} 1] ${cat}] >= 0 } { set match 1 } } ; set res [expr { ${match} } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} }}}
-                #if { [catch { set match 0 ; foreach cat [CATEGORY::lookup "https://${s_sni}/" request_default_and_custom] { if { [lsearch -exact [lindex ${arglist} 1] ${cat}] >= 0 } { set match 1 } } ; set res [expr { ${match} } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } 
-            }
+            "CAT" { if { [info exists catg] } { if { [catch { set match 0 ; foreach cat ${catg} { if { [lsearch -exact [lindex ${arglist} 1] ${cat}] >= 0 } { set match 1 }} ; set res [expr { ${match} } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } } else { set URLF "CATEGORY\x3a\x3alookup" ; set test [catch "${URLF} https://${s_sni}/ request_default_and_custom" catg] ; if { ${catg} contains "Categorization engine returned an error" } { set test [catch "${URLF} https://${s_sni}/ custom" catg] } ; if { ![llength ${catg}] } { return 0 } else { if { [catch { set match 0 ; foreach cat ${catg} { if { [lsearch -exact [lindex ${arglist} 1] ${cat}] >= 0 } { set match 1 } } ; set res [expr { ${match} } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} }}}}
             "DG" { if { [catch { set res [expr { [class match -- ${s_sni} equals [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
             "DGGLOB" { if { [catch { set res [expr { [class match -- ${s_sni} ends_with [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
         }
