@@ -132,6 +132,12 @@ proc target {topology {sni ""} {message ""}} {
         log -noname local0. "SSLO Switch Log :: [IP::client_addr]:[TCP::client_port] -> [IP::local_addr]:[TCP::local_port] :: (${sni}) :: Match on ${message} :: Sending to ${topology}"
     }
 }
+proc target_ssf {topology {message ""}} {
+    virtual ${topology}
+    if { ( $static::SSLODEBUG ) and ( ${message} ne "" ) } {
+        log -noname local0. "SSLO Switch Log :: [IP::client_addr]:[TCP::client_port] -> [IP::local_addr]:[TCP::local_port] :: Match on ${message} :: Sending to ${topology}"
+    }
+}
 proc SRCIP { arg } {
     set arglist [split ${arg} ":"]
     switch -- [lindex ${arglist} 0] {
