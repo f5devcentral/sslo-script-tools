@@ -277,8 +277,6 @@ In this scenario, an explicit proxy configuration is built at each topology inst
 
 - It is also possible to add an HTTP_REQUEST event and client HTTP profile to act on the HTTP Host header of unencrypted HTTP requests. Note that by default ay non-TLS traffic will flow to the specified default topology. By adding a client HTTP profile and any of the following in the HTTP_REQUEST event, you can trigger policy steering on unencrypted HTTP traffic.
 
-<br />
-
       HOST Detection (static URL, category match, data group match)
          HOST URL:<static url>
          HOST URLGLOB:<static url> (ends_with match)
