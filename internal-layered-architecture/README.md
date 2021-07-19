@@ -2,10 +2,10 @@
 A set of iRules for creating a layered SSL Orchestrator, to reduce complexity by treating topologies as functions.
 
 ### Current version:
-2.1.0
+2.2
 
 ### Version support
-This utility works on BIG-IP 14.1 and above, SSL Orchestrator 5.x to 8.x.
+This utility works on BIG-IP 14.1 and above, SSL Orchestrator 5.x to 9.x.
 
 ### Description:
 The SSL Orchestrator Internal Layered Architecture pattern is designed to both simplify configuration and management, and expand the capabilities of an SSL Orchestrator deployment. Too often these configurations can get complex, where large security policies or multiple topologies are required to satisfy different diverse traffic pattern needs. Or, a configuration may require non-strict changes that later make management and upgrades challenging. Consider however, that across multiple security rules and multiple topologies, there are basically FOUR actions that are performed for any traffic pattern:
@@ -227,7 +227,7 @@ In this scenario, an explicit proxy configuration is built at each topology inst
     `call SSLOLIB::target "bypass" ${sni} "SRCIP"`
 
 - Use the following commands to query the proc function for matches (all return true or false)
-    All commands run in CLIENTSSL_CLIENTHELLO to act on SSL traffic.
+    The following commands run in CLIENTSSL_CLIENTHELLO to act on SSL traffic.
 
       Source IP Detection (static IP, IP subnet, data group match)
          SRCIP IP:<ip/subnet>
@@ -272,7 +272,25 @@ In this scenario, an explicit proxy configuration is built at each topology inst
 
       Combinations: above selectors can be used in combinations as required. Example:
          if { ([call SSLOLIB::SRCIP IP:10.1.0.0/16]) and ([call SSLOLIB::DSTIP IP:93.184.216.34]) }
-         
+
+<br />
+- It is also possible to add an HTTP_REQUEST event and client HTTP profile to act on the HTTP Host header of unencrypted HTTP requests. Note that by default ay non-TLS traffic will flow to the specified default topology. By adding a client HTTP profile and any of the following in the HTTP_REQUEST event, you can trigger policy steering on unencrypted HTTP traffic.
+
+      HOST Detection (static URL, category match, data group match)
+         HOST URL:<static url>
+         HOST URLGLOB:<static url> (ends_with match)
+         if { [call SSLOLIB::HOST URL:www.example.com] } { call SSLOLIB::target "topology name" ${host} "HOSTURL" ; return }
+         if { [call SSLOLIB::HOST URLGLOB:.example.com] } { call SSLOLIB::target "topology name" ${host} "HOSTURLGLOB" ; return }
+
+         HOST CAT:<category name or list of categories>
+         if { [call SSLOLIB::HOST CAT:/Common/Financial_Data_and_Services] } { call SSLOLIB::target "topology name" ${host} "HOSTCAT" ; return }
+         if { [call SSLOLIB::HOST CAT:$static::URLCAT_Finance_Health] } { call SSLOLIB::target "topology name" ${host} "HOSTCAT" ; return }
+    
+         HOST DG:<data group name> (string-type data group)
+         HOST DGGLOB:<data group name> (ends_with match)
+         if { [call SSLOLIB::HOST DG:my-sni-list] } { call SSLOLIB::target "topology name" ${host} "HOSTDG" ; return }
+         if { [call SSLOLIB::HOST DGGLOB:my-sniglob-list] } { call SSLOLIB::target "topology name" ${host} "HOSTDGGLOB" ; return }
+
 --------------------------------------------------
 
 ### Traffic selector commands - Explicit Proxy (to be used in traffic switching iRule)
