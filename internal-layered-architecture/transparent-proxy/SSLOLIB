@@ -8,6 +8,7 @@
 ##      2.1: Updated SNI:CAT test and don't fail if URLDB is not provisioned
 ##      2.2: Updated SNI:CAT update to support custom categories only when URLDB not provisioned
 ##      2.2: Added HOST proc
+##      2.2: Added target_ssf proc
 ##
 ## Configuration:
 ##  - Step 1: Import this SSLOLIB iRule (name "SSLOLIB")
