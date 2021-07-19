@@ -352,7 +352,9 @@ In this scenario, an explicit proxy configuration is built at each topology inst
 
 ### Handling Server-Initiated Protocols (transparent forward proxy)
 Server-initiated protocols, sometimes referred to as "server-speaks-first" (SSF) are the subset of TCP protocols that are initiated by the server. In most "client-speaks-first" (CSF) protocols, like HTTP, after the TCP three-way-handshake, the client immediately makes a request (ex. GET / HTTP/1.1...). In a server-speaks-first protocol, like those that perform StartTLS (IMAP, POP3, SMTP), after the three-way-handshake the server sends the first payload (ex. usually a "Hello" message), after which TLS can be negotiated when the server indicates support for it. Under SSL Orchestrator, SSF and CSF protocols are handled separately. Specifically, the SSL Orchestrator guided configuration for a transparent forward proxy topology makes provisions for FTP, IMAP, POP3, and SMTP. When enabled, the guided configuration will create separate port-based interception rules for each.
+
 <br />
+
 To handle SSF protocols through the internal layered architecture, first create the port-based SSF protocol listeners through the SSL Orchestrator guided configuration. This will create separate interception rules for each. In the layered architecture iRule, specify a destination port rule (**DTSPORT**) for each, and steer to the appropriate interception rule. This will use also use a special "target_ssf" proc for steering, and will require the full name and path of the interception rule. For example (where the base topology is named "ssf"):
 
     if { [call SSLOLIB::DSTPORT PORT:21] } { call SSLOLIB::target_ssf "/Common/sslo_ssf.app/sslo_ssf-ftp-4" "FTP" ; return }
