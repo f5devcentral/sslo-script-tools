@@ -1,0 +1,65 @@
+## SSL Orchestrator Use Case: Internal Layered Architecture - Client-Facing Switching iRule  (proxy-in-front using HTTP proxy URL)
+## Version: 1.0
+## Date: 2021-08-16
+## Author: Kevin Stewart, F5 Networks
+## Configuration: see PIFSSLOLIB iRule for build instructions
+##
+## Description: A variation of the proxy-in-front layering use case, where a manually defined LTM explicit proxy ise configured in front of the
+##  internal SSLO instances, and the steering virtual uses the HTTP proxy request URL for steering rules (vs. the TLS SNI).
+##
+when RULE_INIT {
+    ## User-defined: DEBUG logging flag (1=on, 0=off)
+    set static::SSLODEBUG 1
+
+    ## User-defined: Default topology if no rules match (the topology name as defined in SSLO)
+    set static::default_topology "intercept"
+
+    ## User-defined: URL category list (create as many lists as required)
+    set static::URLCAT_Finance_Health {
+        /Common/Financial_Data_and_Services
+        /Common/Health_and_Medicine
+    }
+}
+when CLIENT_ACCEPTED {
+    #### DO NOT EDIT ####
+    set cmd "catch { HTTP::disable }" ; eval ${cmd}
+    sharedvar exphost ; sharedvar expproto
+    #####################
+    
+    
+    ## Set a default topology assuming no other matches
+    call PIFSSLOLIB::target $static::default_topology
+    
+    ## Standard certificate Pinners bypass rule (specify your bypass topology)
+    if { [call PIFSSLOLIB::HOST CAT:/Common/sslo-urlCatPinners] } { call PIFSSLOLIB::target "bypass" ${exphost} "pinners" ; return}
+ 
+    
+    #################################
+    #### HOST CONDITIONS GO HERE ####
+    #################################
+    #if { [call PIFSSLOLIB::SRCIP IP:10.1.0.0/16] } { call PIFSSLOLIB::target "bypass" ${exphost} "SRCIP" ; return }
+    #if { [call PIFSSLOLIB::SRCIP DG:my-srcip-dg] } { call PIFSSLOLIB::target "bypass" ${exphost} "SRCIP" ; return }
+
+    #if { [call PIFSLOLIB::SRCPORT PORT:5000] } { call PIFSSLOLIB::target "bypass" ${exphost} "SRCPORT" ; return }
+    #if { [call PIFSSLOLIB::SRCPORT PORT:1000-60000] } { call PIFSSLOLIB::target "bypass" ${exphost} "SRCPORT" ; return }
+
+    #if { [call PIFSSLOLIB::DSTIP IP:93.184.216.34] } { call PIFSSLOLIB::target "bypass" ${exphost} "DSTIP" ; return }
+    #if { [call PIFSSLOLIB::DSTIP DG:my-destip-dg] } { call PIFSSLOLIB::target "bypass" ${exphost} "DSTIP" ; return }
+
+    #if { [call PIFSSLOLIB::DSTPORT PORT:443] } { call PIFSSLOLIB::target "bypass" ${exphost} "DSTPORT" ; return }
+    #if { [call PIFSSLOLIB::DSTPORT PORT:443-9999] } { call PIFSSLOLIB::target "bypass" ${exphost} "DSTPORT" ; return }
+
+    #if { [call PIFSSLOLIB::HOST URL:www.example.com] } { call PIFSSLOLIB::target "bypass" ${exphost} "HOSTURL" ; return }
+    #if { [call PIFSSLOLIB::HOST URLGLOB:.example.com] } { call PIFSSLOLIB::target "bypass" ${exphost} "HOSTURLGLOB" ; return }
+
+    #if { [call PIFSSLOLIB::HOST CAT:$static::URLCAT_Finance_Health] } { call PIFSSLOLIB::target "bypass" ${exphost} "HOSTCAT" ; return }
+    #if { [call PIFSSLOLIB::HOST CAT:/Common/Financial_Data_and_Services] } { call PIFSSLOLIB::target "bypass" ${exphost} "HOSTCAT" ; return }
+    #if { [call PIFSSLOLIB::HOST CAT:/Common/testcat] } { call PIFSSLOLIB::target "bypass" ${exphost} "HOSTCAT" ; return }
+
+    #if { [call PIFSSLOLIB::HOST DG:my-sni-dg] } { call PIFSSLOLIB::target "bypass" ${exphost} "HOSTDGGLOB" ; return }
+    #if { [call PIFSSLOLIB::HOST DGGLOB:my-sniglob-dg] } { call PIFSSLOLIB::target "bypass" ${exphost} "HOSTDGGLOB" ; return }
+
+    ## To combine these, you can use smple AND|OR logic:
+    #if { ( [call PIFSSLOLIB::DSTIP DG:my-destip-dg] ) and ( [call PIFSSLOLIB::SRCIP DG:my-srcip-dg] ) } { call PIFSSLOLIB::target "bypass" ${exphost} "HOSTDGGLOB" ; return }   
+    
+}
