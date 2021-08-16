@@ -385,49 +385,49 @@ In this scenario, an explicit proxy configuration is built at each topology inst
   - Example: 
     `call PIFSSLOLIB::target "bypass" ${host} "SRCIP"`
 
-      Source IP Detection (static IP, IP subnet, data group match)
-         SRCIP IP:<ip/subnet>
-         SRCIP DG:<data group name> (address-type data group)
-         if { [call PIFSSLOLIB::SRCIP IP:10.1.0.0/16] } { call PIFSSLOLIB::target "topology name" ${host} "SRCIP" ; return }
-         if { [call PIFSSLOLIB::SRCIP DG:my_sip_list] } { call PIFSSLOLIB::target "topology name" ${host} "SRCIP" ; return }
+        Source IP Detection (static IP, IP subnet, data group match)
+           SRCIP IP:<ip/subnet>
+           SRCIP DG:<data group name> (address-type data group)
+           if { [call PIFSSLOLIB::SRCIP IP:10.1.0.0/16] } { call PIFSSLOLIB::target "topology name" ${host} "SRCIP" ; return }
+           if { [call PIFSSLOLIB::SRCIP DG:my_sip_list] } { call PIFSSLOLIB::target "topology name" ${host} "SRCIP" ; return }
 
-      Source Port Detection (static port, port range, data group match)
-         SRCPORT PORT:<port/port-range>
-         SRCPORT DG:<data group name> (integer-type data group)
-         if { [call PIFSSLOLIB::SRCPORT PORT:15000] } { call PIFSSLOLIB::target "topology name" ${host} "SRCPORT" ; return }
-         if { [call PIFSSLOLIB::SRCPORT PORT:1000-60000] } { call PIFSSLOLIB::target "topology name" ${host} "SRCPORT" ; return }
-         if { [call PIFSSLOLIB::SRCPORT DG:my-sport-list] } { call PIFSSLOLIB::target "topology name" ${host} "SRCPORT" ; return }
+        Source Port Detection (static port, port range, data group match)
+           SRCPORT PORT:<port/port-range>
+           SRCPORT DG:<data group name> (integer-type data group)
+           if { [call PIFSSLOLIB::SRCPORT PORT:15000] } { call PIFSSLOLIB::target "topology name" ${host} "SRCPORT" ; return }
+           if { [call PIFSSLOLIB::SRCPORT PORT:1000-60000] } { call PIFSSLOLIB::target "topology name" ${host} "SRCPORT" ; return }
+           if { [call PIFSSLOLIB::SRCPORT DG:my-sport-list] } { call PIFSSLOLIB::target "topology name" ${host} "SRCPORT" ; return }
 
-      Destination IP Detection (static IP, IP subnet, data group match)
-         DSTIP IP:<ip/subnet>
-         DSTIP DG:<data group name> (address-type data group)
-         if { [call PIFSSLOLIB::DSTIP IP:93.184.216.34] } { call PIFSSLOLIB::target "topology name" ${host} "DSTIP" ; return }
-         if { [call PIFSSLOLIB::DSTIP DG:my-dip-list] } { call PIFSSLOLIB::target "topology name" ${host} "DSTIP" ; return }
+        Destination IP Detection (static IP, IP subnet, data group match)
+           DSTIP IP:<ip/subnet>
+           DSTIP DG:<data group name> (address-type data group)
+           if { [call PIFSSLOLIB::DSTIP IP:93.184.216.34] } { call PIFSSLOLIB::target "topology name" ${host} "DSTIP" ; return }
+           if { [call PIFSSLOLIB::DSTIP DG:my-dip-list] } { call PIFSSLOLIB::target "topology name" ${host} "DSTIP" ; return }
 
-      Destination Port Detection (static port, port range, data group match)
-         DSTPORT PORT:<port/port-range>
-         DSTPORT DG:<data group name> (integer-type data group)
-         if { [call PIFSSLOLIB::DSTPORT PORT:443] } { call PIFSSLOLIB::target "topology name" ${host} "DSTPORT" ; return }
-         if { [call PIFSSLOLIB::DSTPORT PORT:1-1024] } { call PIFSSLOLIB::target "topology name" ${host} "DSTPORT" ; return }
-         if { [call PIFSSLOLIB::DSTPORT DG:my-dport-list] } { call PIFSSLOLIB::target "topology name" ${host} "DSTPORT" ; return }
+        Destination Port Detection (static port, port range, data group match)
+           DSTPORT PORT:<port/port-range>
+           DSTPORT DG:<data group name> (integer-type data group)
+           if { [call PIFSSLOLIB::DSTPORT PORT:443] } { call PIFSSLOLIB::target "topology name" ${host} "DSTPORT" ; return }
+           if { [call PIFSSLOLIB::DSTPORT PORT:1-1024] } { call PIFSSLOLIB::target "topology name" ${host} "DSTPORT" ; return }
+           if { [call PIFSSLOLIB::DSTPORT DG:my-dport-list] } { call PIFSSLOLIB::target "topology name" ${host} "DSTPORT" ; return }
 
-      HOST Detection (static URL, category match, data group match)
-         HOST URL:<static url>
-         HOST URLGLOB:<static url> (ends_with match)
-         if { [call PIFSSLOLIB::HOST URL:www.example.com] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTURL" ; return }
-         if { [call PIFSSLOLIB::HOST URLGLOB:.example.com] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTURLGLOB" ; return }
+        HOST Detection (static URL, category match, data group match)
+           HOST URL:<static url>
+           HOST URLGLOB:<static url> (ends_with match)
+           if { [call PIFSSLOLIB::HOST URL:www.example.com] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTURL" ; return }
+           if { [call PIFSSLOLIB::HOST URLGLOB:.example.com] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTURLGLOB" ; return }
 
-         HOST CAT:<category name or list of categories>
-         if { [call PIFSSLOLIB::HOST CAT:/Common/Financial_Data_and_Services] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTCAT" ; return }
-         if { [call PIFSSLOLIB::HOST CAT:$static::URLCAT_Finance_Health] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTCAT" ; return }
+           HOST CAT:<category name or list of categories>
+           if { [call PIFSSLOLIB::HOST CAT:/Common/Financial_Data_and_Services] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTCAT" ; return }
+           if { [call PIFSSLOLIB::HOST CAT:$static::URLCAT_Finance_Health] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTCAT" ; return }
 
-         HOST DG:<data group name> (string-type data group)
-         HOST DGGLOB:<data group name> (ends_with match)
-         if { [call PIFSSLOLIB::HOST DG:my-sni-list] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTDG" ; return }
-         if { [call PIFSSLOLIB::HOST DGGLOB:my-sniglob-list] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTDGGLOB" ; return }
+           HOST DG:<data group name> (string-type data group)
+           HOST DGGLOB:<data group name> (ends_with match)
+           if { [call PIFSSLOLIB::HOST DG:my-sni-list] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTDG" ; return }
+           if { [call PIFSSLOLIB::HOST DGGLOB:my-sniglob-list] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTDGGLOB" ; return }
 
-      Combinations: above selectors can be used in combinations as required. Example:
-         if { ([call PIFSSLOLIB::SRCIP IP:10.1.0.0/16]) and ([call PIFSSLOLIB::DSTIP IP:93.184.216.34]) }
+        Combinations: above selectors can be used in combinations as required. Example:
+           if { ([call PIFSSLOLIB::SRCIP IP:10.1.0.0/16]) and ([call PIFSSLOLIB::DSTIP IP:93.184.216.34]) }
 
 --------------------------------------------------
 
