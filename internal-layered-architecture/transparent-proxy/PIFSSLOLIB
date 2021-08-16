@@ -1,0 +1,190 @@
+## SSL Orchestrator Use Case: Internal Layered Architecture - PIFSSLOLIB Traffic Matching Library (proxy-in-front using HTTP proxy URL)
+## Version: 1.0
+## Date: 2021-08-16
+## Author: Kevin Stewart, F5 Networks
+##
+## Description: A variation of the proxy-in-front layering use case, where a manually defined LTM explicit proxy ise configured in front of the
+##  internal SSLO instances, and the steering virtual uses the HTTP proxy request URL for steering rules (vs. the TLS SNI).
+##
+## Configuration:
+##  - Step 1: Import this SSLOLIB iRule (name "PIFSSLOLIB")
+##
+##  - Step 2: Import the "pif_explicit_proxy_rule" iRule
+##
+##  - Step 3: Import the "pif_sslo_layering_rule" iRule
+##
+##  - Step 4: Create the client-facing explicit proxy TCP tunnel (Network :: Tunnels)
+##      Profile: tcp-forward
+##
+##  - Step 5: Create the client-facing explicit proxy DNS resolver (Network :: DNS Resolvers)
+##      Forward Zones:
+##          Name: "." (without quotes)
+##          Nameservers: add the address and port of the DNS resolvers
+##
+##  - Step 6: Create the client-facing explicit proxy HTTP profile (Local Traffic :: Profiles :: HTTP)
+##      Proxy Mode: Explicit
+##      Explicit Proxy :: DNS Resolver: select the DNS resolver
+##      Explicit Proxy :: Tunnel Mame: select the TCP tunnel
+##      Explicit Proxy :: Use Tunnel On Any Request Method: enabled (available in BIG-IP 16.0)
+##      Explicit Proxy :: Default Connect Handling: deny
+##
+##  - Step 7: Create the client-facing explicit proxy virtual server (Local Traffic :: Virtual Servers)
+##      Type: Standard
+##      Source: 0.0.0.0/0
+##      Destination: client-facing explicit proxy IP address
+##      Port: client-facing explicit proxy listening port
+##      Protocol: TCP
+##      HTTP Profile (Client): select the HTTP explicit profile
+##      VLAN: client-facing VLAN
+##      Address/Port Translation: enabled
+##      iRule: select the "pif_explicit_proxy_rule"
+##      ** Note: If deploying on BIG-IP earlier than 16.0, the following must be added to the pif_explicit_proxy_rule:
+##
+##      when HTTP_REQUEST {
+##          virtual "/Common/tcp-tunnel-vip" [HTTP::proxy addr] [HTTP::proxy port]
+##      }
+##
+##      Change "/Common/tcp-tunnel-vip" to match the name of the TCP tunnel virtual server.
+##
+##  - Step 8: Create the tcp tunnel steering virtual server (Local Traffic :: Virtual Servers)
+##      Type: Standard
+##      Source: 0.0.0.0/0
+##      Destination: 0.0.0.0/0
+##      Port: 0
+##      VLAN: select the tcp tunnel VLAN
+##      Address/Port Translation: disabled
+##      iRule: select the pif_sslo_layering_rule iRule
+##
+##  - Step 9: Build semi-static SSL Orchestrator topologies based on common actions (ex. allow, intercept, service chain)
+##      - Minimally create a normal "intercept" topology and a separate "bypass" topology
+##          Intercept topology:
+##            - L3 outbound topology configuration, normal topology settings, SSL config, services, service chain
+##            - No security policy rules - just a single ALL rule with TLS intercept action (and service chain)
+##            - Attach to a "dummy" VLAN
+##          Bypass topology:
+##            - L3 outbound topology configuration, skip SSL config, re-use services, service chains
+##            - No security policy rules - just a single ALL rule with TLS bypass action (and service chain)
+##            - Attached to a separate "dummy" VLAN
+##      - Create any additional topologies as required, as separate functions based on discrete actions (allow/block, intercept/bypass, service chain)
+##
+##  - Step 10: modify the traffic switching iRule with the required detection commands (below)
+##
+##
+## Traffic selector commands (to be used in traffic switching iRule)
+##  - Call the "target" proc with the following parameters (<topology name>, ${host}, <message>)
+##      - <topology name> is the base name of the defined topology
+##      - ${host} is static here and returns the server name indication value (HOST) for logging
+##      - <message> is any string message to send to the log (ex. which rule matched)
+##      - return is added at the end of each command to cancel any further matching
+##      - Example: 
+##           call PIFSSLOLIB::target "bypass" ${host} "SRCIP"
+##
+##      Source IP Detection (static IP, IP subnet, data group match)
+##         SRCIP IP:<ip/subnet>
+##         SRCIP DG:<data group name> (address-type data group)
+##         if { [call PIFSSLOLIB::SRCIP IP:10.1.0.0/16] } { call PIFSSLOLIB::target "topology name" ${host} "SRCIP" ; return }
+##         if { [call PIFSSLOLIB::SRCIP DG:my_sip_list] } { call PIFSSLOLIB::target "topology name" ${host} "SRCIP" ; return }
+## 
+##      Source Port Detection (static port, port range, data group match)
+##         SRCPORT PORT:<port/port-range>
+##         SRCPORT DG:<data group name> (integer-type data group)
+##         if { [call PIFSSLOLIB::SRCPORT PORT:15000] } { call PIFSSLOLIB::target "topology name" ${host} "SRCPORT" ; return }
+##         if { [call PIFSSLOLIB::SRCPORT PORT:1000-60000] } { call PIFSSLOLIB::target "topology name" ${host} "SRCPORT" ; return }
+##         if { [call PIFSSLOLIB::SRCPORT DG:my-sport-list] } { call PIFSSLOLIB::target "topology name" ${host} "SRCPORT" ; return }
+## 
+##      Destination IP Detection (static IP, IP subnet, data group match)
+##         DSTIP IP:<ip/subnet>
+##         DSTIP DG:<data group name> (address-type data group)
+##         if { [call PIFSSLOLIB::DSTIP IP:93.184.216.34] } { call PIFSSLOLIB::target "topology name" ${host} "DSTIP" ; return }
+##         if { [call PIFSSLOLIB::DSTIP DG:my-dip-list] } { call PIFSSLOLIB::target "topology name" ${host} "DSTIP" ; return }
+## 
+##      Destination Port Detection (static port, port range, data group match)
+##         DSTPORT PORT:<port/port-range>
+##         DSTPORT DG:<data group name> (integer-type data group)
+##         if { [call PIFSSLOLIB::DSTPORT PORT:443] } { call PIFSSLOLIB::target "topology name" ${host} "DSTPORT" ; return }
+##         if { [call PIFSSLOLIB::DSTPORT PORT:1-1024] } { call PIFSSLOLIB::target "topology name" ${host} "DSTPORT" ; return }
+##         if { [call PIFSSLOLIB::DSTPORT DG:my-dport-list] } { call PIFSSLOLIB::target "topology name" ${host} "DSTPORT" ; return }
+##
+##      HOST Detection (static URL, category match, data group match)
+##         HOST URL:<static url>
+##         HOST URLGLOB:<static url> (ends_with match)
+##         if { [call PIFSSLOLIB::HOST URL:www.example.com] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTURL" ; return }
+##         if { [call PIFSSLOLIB::HOST URLGLOB:.example.com] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTURLGLOB" ; return }
+##
+##         HOST CAT:<category name or list of categories>
+##         if { [call PIFSSLOLIB::HOST CAT:/Common/Financial_Data_and_Services] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTCAT" ; return }
+##         if { [call PIFSSLOLIB::HOST CAT:$static::URLCAT_Finance_Health] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTCAT" ; return }
+##    
+##         HOST DG:<data group name> (string-type data group)
+##         HOST DGGLOB:<data group name> (ends_with match)
+##         if { [call PIFSSLOLIB::HOST DG:my-sni-list] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTDG" ; return }
+##         if { [call PIFSSLOLIB::HOST DGGLOB:my-sniglob-list] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTDGGLOB" ; return }
+##
+##      Combinations: above selectors can be used in combinations as required. Example:
+##         if { ([call PIFSSLOLIB::SRCIP IP:10.1.0.0/16]) and ([call PIFSSLOLIB::DSTIP IP:93.184.216.34]) }
+##
+## DO NOT MODIFY BELOW ##
+## PIFSSLOLIB library functions perform error detection and will return 0 (false) in any reasonable error condition (ex. incorrect data group name).
+
+proc errorlog {message} {
+    if { $static::SSLODEBUG } {
+        log -noname local0. "PIFSSLOLIB Error :: [IP::client_addr]:[TCP::client_port] -> [IP::local_addr]:[TCP::local_port] :: ${message}"
+    }
+}
+proc target {topology {host ""} {message ""}} {
+    sharedvar HOST
+    set HOST ${host}
+    virtual "/Common/sslo_${topology}.app/sslo_${topology}-in-t-4"
+    if { ( $static::SSLODEBUG ) and ( ${host} ne "" ) and ( ${message} ne "" ) } {
+        log -noname local0. "SSLO Switch Log :: [IP::client_addr]:[TCP::client_port] -> [IP::local_addr]:[TCP::local_port] :: (${host}) :: Match on ${message} :: Sending to ${topology}"
+    }
+}
+proc target_ssf {topology {message ""}} {
+    virtual ${topology}
+    if { ( $static::SSLODEBUG ) and ( ${message} ne "" ) } {
+        log -noname local0. "SSLO Switch Log :: [IP::client_addr]:[TCP::client_port] -> [IP::local_addr]:[TCP::local_port] :: Match on ${message} :: Sending to ${topology}"
+    }
+}
+proc SRCIP { arg } {
+    set arglist [split ${arg} ":"]
+    switch -- [lindex ${arglist} 0] {
+        "IP" { if { [catch { set res [expr { [IP::addr [lindex ${arglist} 1] equals [IP::client_addr]] } ? 1 : 0] } err] } { call PIFSSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+        "DG" { if { [catch { set res [expr { [class match -- [IP::client_addr] equals [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call PIFSSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+    }
+}
+proc SRCPORT { arg } {
+    set arglist [split ${arg} ":"]
+    switch -- [lindex ${arglist} 0] {
+        "PORT" { if { [catch { if { [lindex ${arglist} 1] contains "-" } { set portlist [split [lindex ${arglist} 1] "-"] ; set res [expr { ( [TCP::client_port] > [lindex ${portlist} 0] ) and ( [TCP::client_port] < [lindex ${portlist} 1] ) } ? 1 : 0] } else {set res [expr { [lindex ${arglist} 1] == [TCP::client_port] } ? 1 : 0] }} err] } { call PIFSSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+        "DG" { if { [catch { set res [expr { [class match -- [TCP::client_port] equals [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call PIFSSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+    }
+}
+proc DSTIP { arg } {
+    set arglist [split ${arg} ":"]
+    switch -- [lindex ${arglist} 0] {
+        "IP" { if { [catch { set res [expr { [IP::addr [lindex ${arglist} 1] equals [IP::local_addr]] } ? 1 : 0] } err] } { call PIFSSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+        "DG" { if { [catch { set res [expr { [class match -- [IP::local_addr] equals [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call PIFSSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+    }
+}
+proc DSTPORT { arg } {
+    set arglist [split ${arg} ":"]
+    switch -- [lindex ${arglist} 0] {
+        "PORT" { if { [catch { if { [lindex ${arglist} 1] contains "-" } { set portlist [split [lindex ${arglist} 1] "-"] ; set res [expr { ( [TCP::local_port] > [lindex ${portlist} 0] ) and ( [TCP::local_port] < [lindex ${portlist} 1] ) } ? 1 : 0] } else {set res [expr { [lindex ${arglist} 1] == [TCP::local_port] } ? 1 : 0] }} err] } { call PIFSSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+        "DG" { if { [catch { set res [expr { [class match -- [TCP::local_port] equals [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call PIFSSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+    }
+}
+proc HOST { arg } {
+    sharedvar exphost ; sharedvar expproto
+    upvar exphost host 
+    upvar cat catg
+    if { ${exphost} != "" } {
+        set arglist [split ${arg} ":"]
+        switch -- [lindex ${arglist} 0] {
+            "URL" { return [expr { ${exphost} eq [lindex ${arglist} 1] } ? 1 : 0] }
+            "URLGLOB" { return [expr { ${exphost} ends_with [lindex ${arglist} 1] } ? 1 : 0] }
+            "CAT" { if { [info exists catg] } { if { [catch { set match 0 ; foreach cat ${catg} { if { [lsearch -exact [lindex ${arglist} 1] ${cat}] >= 0 } { set match 1 }} ; set res [expr { ${match} } ? 1 : 0] } err] } { call PIFSSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } } else { set URLF "CATEGORY\x3a\x3alookup" ; set test [catch "${URLF} ${expproto}://${exphost}/ request_default_and_custom" catg] ; if { ${catg} contains "Categorization engine returned an error" } { set test [catch "${URLF} ${expproto}://${exphost}/ custom" catg] } ; if { ![llength ${catg}] } { return 0 } else { if { [catch { set match 0 ; foreach cat ${catg} { if { [lsearch -exact [lindex ${arglist} 1] ${cat}] >= 0 } { set match 1 } } ; set res [expr { ${match} } ? 1 : 0] } err] } { call PIFSSLOLIB::errorlog ${err} ; return 0 } else { return ${res} }}}}
+            "DG" { if { [catch { set res [expr { [class match -- ${exphost} equals [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call PIFSSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+            "DGGLOB" { if { [catch { set res [expr { [class match -- ${exphost} ends_with [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call PIFSSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+        }
+    } else { return 0 }
+}
