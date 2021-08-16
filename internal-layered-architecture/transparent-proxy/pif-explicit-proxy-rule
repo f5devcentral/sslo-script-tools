@@ -1,0 +1,13 @@
+when HTTP_PROXY_REQUEST {
+    sharedvar exphost
+    sharedvar expproto
+    
+    ## parse incoming request URL
+    if { [HTTP::uri] starts_with "http://" } { 
+        set exphost [findstr [findstr [HTTP::uri] "http://" 7] "" 0 "/"]
+        set expproto "http"
+    } else {
+        set exphost [findstr [HTTP::uri] "" 0 ":"]
+        set expproto "https"
+    }
+}
