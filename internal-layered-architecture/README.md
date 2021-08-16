@@ -82,91 +82,169 @@ In a transparent forward proxy, the steering VIP and SSL Orchestrator topologies
 
 --------------------------------------------------
 
-#### Explicit Forward Proxy (proxy in front)
-In this scenario, an explicit proxy configuration is built up front at the steering layer. A BIG-IP LTM explicit proxy consists of a DNS resolver, TCP tunnel, HTTP explicit profile, an HTTP explicit proxy virtual server, and a separate TCP tunnel virtual server. Traffic flows from the client to the HTTP explicit proxy VIP and is tunneled through the TCP tunnel VIP. Therefore to configure the explicit proxy for the Internal Layered Architecture, simply apply the layering iRule to the TCP tunnel VIP, which will behave exactly the same way as the transparent proxy implementation. This will use the same iRules under the **transparent-proxy** subfolder.
+#### Explicit Forward Proxy (proxy in front) - TLS SNI evaluation
+In this scenario, an explicit proxy configuration is built up front at the steering layer. A BIG-IP LTM explicit proxy consists of a DNS resolver, TCP tunnel, HTTP explicit profile, an HTTP explicit proxy virtual server, and a separate TCP tunnel virtual server. Traffic flows from the client to the HTTP explicit proxy VIP and is tunneled through the TCP tunnel VIP. **The TCP tunnel VIP parses the TLS SNI for SNI/HOST evaluation**. Therefore to configure the explicit proxy for the Internal Layered Architecture, simply apply the layering iRule to the TCP tunnel VIP, which will behave exactly the same way as the transparent proxy implementation. This will use the same iRules under the **transparent-proxy** subfolder.
 
 ![SSL Orchestrator Internal Layered Architecture](images/sslo-internal-layered-architecture-ep-front.png)
 
 *Note: to perform explicit proxy authentication, an SWG-Explicit access profile would be applied to the frontend explicit proxy configuration.*
 
-- **Step 1**: Create the DNS Resolver for the HTTP explicit config. Under Network -> DNS Resolvers -> DNS Resolver List, click **Create** provide a unique name and click **Finished**. Now click to edit this new DNS resolver and navigate to the Forward Zones tab and click **Add**. 
+- **Step 1**: Import this SSLOLIB iRule (name "SSLOLIB")
+
+- **Step 3**: Import the "sslo-layering-rule" iRule
+
+- **Step 4**: Create the DNS Resolver for the HTTP explicit config. Under Network -> DNS Resolvers -> DNS Resolver List, click **Create** provide a unique name and click **Finished**. Now click to edit this new DNS resolver and navigate to the Forward Zones tab and click **Add**. 
   - Name: enter "." (without quotation marks)
   - Address: enter the address of your preferred DNS resolver
   - Service Port: enter the listening port of the DNS resolver
   - Click **Add** and then **Finished**.
 
-- **Step 2**: Create the TCP Tunnel for the HTTP explicit config. Under Network -> Tunnels -> Tunnel List, click **Create**. 
+- **Step 5**: Create the TCP Tunnel for the HTTP explicit config. Under Network -> Tunnels -> Tunnel List, click **Create**. 
   - Name: provide a unique name
   - Profile: tcp-forward
   - Click **Finished**
 
-- **Step 3**: Create the HTTP explicit profile. Under Local Traffic -> Profiles -> Services -> HTTP, click **Create**.
+- **Step 6**: Create the HTTP explicit profile. Under Local Traffic -> Profiles -> Services -> HTTP, click **Create**.
   - Name: provide a unique name
   - Proxy Mode: select Explicit
   - Explicit Proxy : DNS Resolver: enable and select the previously-created DNS resolver
   - Explicit Proxy : Tunnel Name: enable and select the previously-create TCP tunnel
+  - Explicit Proxy : Use Tunnel On Any Request Method: enabled (available in BIG-IP 16.0)
+  - Explicit Proxy : Default Connect Handling: deny
   - Optionally add content to the Explicit Proxy failure messages
   - Click **Finished**
 
-- **Step 4**: Create the TCP Tunnel VIP. Under Local Traffic -> Virtual Servers, click **Create**.
-  - Name: provide a unique name
-  - Source Address: enter 0.0.0.0/0
-  - Destination Address/Mask: enter 0.0.0.0/0
-  - Service Port: enter *
-  - Configuration : VLAN and Tunnel Traffic: select **Enabled on...** and select the previously-created TCP tunnel
-  - Address Translation: disabled
-  - Port Translation: disabled
-  - Default Persistence Profile: ssl
-  - Click **Finished**
+- **Step 7**: Create the client-facing explicit proxy virtual server (Local Traffic :: Virtual Servers)
+  - Type: Standard
+  - Source: 0.0.0.0/0
+  - Destination: client-facing explicit proxy IP address
+  - Port: client-facing explicit proxy listening port
+  - Protocol: TCP
+  - HTTP Profile (Client): select the HTTP explicit profile
+  - VLAN: client-facing VLAN
+  - Address/Port Translation: enabled
 
-- **Step 5**: Create a tunneling iRule. The tunneling iRule is used on the HTTP explicit VIP to ensure unencrypted HTTP proxy requests also flow through the TCP tunnel. Under Local Traffic -> iRules, click **Create**
-    
+    ** Note: If deploying on BIG-IP earlier than 16.0, the following must be added to the pif_explicit_proxy_rule **:
+
+      ```
       when HTTP_REQUEST {
-         virtual "/Common/tcp-tunnel-vip" [HTTP::proxy addr] [HTTP::proxy port]
+        virtual "/Common/tcp-tunnel-vip" [HTTP::proxy addr] [HTTP::proxy port]
       }
+      ```
 
-  Change "/Common/tcp-tunnel-vip" to match the name of the TCP tunnel virtual server.
+      Change "/Common/tcp-tunnel-vip" to match the name of the TCP tunnel virtual server.
 
-- **Step 6**: Create the HTTP explicit proxy VIP. Under Local Traffic -> Virtual Servers, click **Create**.
-  - Name: provide a unique name
-  - Source Address: enter 0.0.0.0/0
-  - Destination Address/Mask: enter the explicit proxy listening IP address (what clients will be configured to talk to)
-  - Service Port: enter the explicit proxy listening port (ex. 3128, 8080)
-  - Configuration : HTTP Profile (Client): enter the previously-created HTTP explicit profile
-  - Configuration : VLAN and Tunnel Traffic: select **Enabled on...** and select the client-facing VLAN
-  - Address Translation: enabled
-  - Port Translation: enabled
-  - iRules: select the previously-created tunneling iRule
-  - Click **Finished**
-
-- **Step 7**: Import this SSLOLIB iRule (name "SSLOLIB")
-
-- **Step 8**: Build a set of "dummy" VLANs. A topology must be bound to a unique VLAN. But since the topologies in this architecture won't be listening on an actual client-facing VLAN, you will need to create a separate dummy VLAN for each topology you intend to create. A dummy VLAN is basically a VLAN with no interface assigned. In the BIG-IP UI, under Network -> VLANs, click Create. Give your VLAN a name and click Finished. It will ask you to confirm since you're not attaching an interface. Click OK to continue. Repeat this step by creating unique VLAN names for each topology you are planning to use.
+- **Step 8**: Create the tcp tunnel steering virtual server (Local Traffic :: Virtual Servers)
+  - Type: Standard
+  - Source: 0.0.0.0/0
+  - Destination: 0.0.0.0/0
+  - Port: 0
+  - VLAN: select the tcp tunnel VLAN
+  - Address/Port Translation: disabled
+  - Default Persistence Profile: select "**ssl**"
+  - iRule: select the sslo-layering-rule iRule
 
 - **Step 9**: Build semi-static SSL Orchestrator topologies based on common actions (ex. allow, intercept, service chain)
   - Minimally create a normal "intercept" topology and a separate "bypass" topology
-  
-    Intercept topology:
+    - Intercept topology:
       - L3 outbound topology configuration, normal topology settings, SSL config, services, service chain
       - No security policy rules - just a single ALL rule with TLS intercept action (and service chain)
       - Attach to a "dummy" VLAN
-
-    Bypass topology:
+    - Bypass topology:
       - L3 outbound topology configuration, skip SSL config, re-use services, service chains
       - No security policy rules - just a single ALL rule with TLS bypass action (and service chain)
       - Attached to a separate "dummy" VLAN
+      - Create any additional topologies as required, as separate functions based on discrete actions (allow/block, intercept/bypass, service chain)
 
-  - Create any additional topologies as required, as separate functions based on discrete actions (allow/block, intercept/bypass, service chain, egress)
-
-- **Step 10**: Import the traffic switching iRule
+- **Step 10**: modify the traffic switching iRule with the required detection commands (below)
   - Set necessary static configuration values in RULE_INIT as required
   - Define any URL category lists in RULE_INIT as required (see example). Use the following command to get a list of URL categories:
 
     `tmsh list sys url-db url-category |grep "sys url-db url-category " |awk -F" " '{print $4}'`
 
-- **Step 11**: Add the traffic switching iRule to the TCP tunnel virtual server.
+--------------------------------------------------
 
-- **Step 12**: modify the traffic switching iRule with the required detection commands. See **Traffic Selector commands - Transparent Proxy** information below.
+#### Explicit Forward Proxy (proxy in front) - Proxy request HOST evaluation
+In this scenario, an explicit proxy configuration is built up front at the steering layer. A BIG-IP LTM explicit proxy consists of a DNS resolver, TCP tunnel, HTTP explicit profile, an HTTP explicit proxy virtual server, and a separate TCP tunnel virtual server. Traffic flows from the client to the HTTP explicit proxy VIP and is tunneled through the TCP tunnel VIP. **The TCP tunnel VIP parses the proxy request for HOST evaluation**. This version has the advantage of not requiring binary TLS handshake parsing and natively works for HTTP and HTTPS requests.
+
+![SSL Orchestrator Internal Layered Architecture](images/sslo-internal-layered-architecture-ep-front.png)
+
+*Note: to perform explicit proxy authentication, an SWG-Explicit access profile would be applied to the frontend explicit proxy configuration.*
+
+- **Step 1**: Import this SSLOLIB iRule (name "PIFSSLOLIB")
+
+- **Step 2**: Import the "pif-explicit-proxy-rule" iRule
+
+- **Step 3**: Import the "pif-sslo-layering-rule" iRule
+
+- **Step 4**: Create the DNS Resolver for the HTTP explicit config. Under Network -> DNS Resolvers -> DNS Resolver List, click **Create** provide a unique name and click **Finished**. Now click to edit this new DNS resolver and navigate to the Forward Zones tab and click **Add**. 
+  - Name: enter "." (without quotation marks)
+  - Address: enter the address of your preferred DNS resolver
+  - Service Port: enter the listening port of the DNS resolver
+  - Click **Add** and then **Finished**.
+
+- **Step 5**: Create the TCP Tunnel for the HTTP explicit config. Under Network -> Tunnels -> Tunnel List, click **Create**. 
+  - Name: provide a unique name
+  - Profile: tcp-forward
+  - Click **Finished**
+
+- **Step 6**: Create the HTTP explicit profile. Under Local Traffic -> Profiles -> Services -> HTTP, click **Create**.
+  - Name: provide a unique name
+  - Proxy Mode: select Explicit
+  - Explicit Proxy : DNS Resolver: enable and select the previously-created DNS resolver
+  - Explicit Proxy : Tunnel Name: enable and select the previously-create TCP tunnel
+  - Explicit Proxy : Use Tunnel On Any Request Method: enabled (available in BIG-IP 16.0)
+  - Explicit Proxy : Default Connect Handling: deny
+  - Optionally add content to the Explicit Proxy failure messages
+  - Click **Finished**
+
+- **Step 7**: Create the client-facing explicit proxy virtual server (Local Traffic :: Virtual Servers)
+  - Type: Standard
+  - Source: 0.0.0.0/0
+  - Destination: client-facing explicit proxy IP address
+  - Port: client-facing explicit proxy listening port
+  - Protocol: TCP
+  - HTTP Profile (Client): select the HTTP explicit profile
+  - VLAN: client-facing VLAN
+  - Address/Port Translation: enabled
+  - iRule: select the "pif-explicit-proxy-rule"
+
+    ** Note: If deploying on BIG-IP earlier than 16.0, the following must be added to the pif_explicit_proxy_rule **:
+
+      ```
+      when HTTP_REQUEST {
+        virtual "/Common/tcp-tunnel-vip" [HTTP::proxy addr] [HTTP::proxy port]
+      }
+      ```
+
+      Change "/Common/tcp-tunnel-vip" to match the name of the TCP tunnel virtual server.
+
+- **Step 8**: Create the tcp tunnel steering virtual server (Local Traffic :: Virtual Servers)
+  - Type: Standard
+  - Source: 0.0.0.0/0
+  - Destination: 0.0.0.0/0
+  - Port: 0
+  - VLAN: select the tcp tunnel VLAN
+  - Address/Port Translation: disabled
+  - iRule: select the pif-sslo-layering-rule iRule
+
+- **Step 9**: Build semi-static SSL Orchestrator topologies based on common actions (ex. allow, intercept, service chain)
+  - Minimally create a normal "intercept" topology and a separate "bypass" topology
+    - Intercept topology:
+      - L3 outbound topology configuration, normal topology settings, SSL config, services, service chain
+      - No security policy rules - just a single ALL rule with TLS intercept action (and service chain)
+      - Attach to a "dummy" VLAN
+    - Bypass topology:
+      - L3 outbound topology configuration, skip SSL config, re-use services, service chains
+      - No security policy rules - just a single ALL rule with TLS bypass action (and service chain)
+      - Attached to a separate "dummy" VLAN
+      - Create any additional topologies as required, as separate functions based on discrete actions (allow/block, intercept/bypass, service chain)
+
+- **Step 10**: modify the traffic switching iRule with the required detection commands (below)
+  - Set necessary static configuration values in RULE_INIT as required
+  - Define any URL category lists in RULE_INIT as required (see example). Use the following command to get a list of URL categories:
+
+    `tmsh list sys url-db url-category |grep "sys url-db url-category " |awk -F" " '{print $4}'`
 
 --------------------------------------------------
 
@@ -217,7 +295,7 @@ In this scenario, an explicit proxy configuration is built at each topology inst
 
 --------------------------------------------------
 
-### Traffic selector commands - Transparent Proxy (to be used in traffic switching iRule)
+### Traffic selector commands - Transparent Proxy and proxy-in-front (SNI evaluation)
 - Call the "target" proc with the following parameters ([topology name], ${sni}, [message])
   - **[topology name]** is the base name of the defined topology
   - **${sni}** is static here and returns the server name indication value (SNI) for logging
@@ -298,7 +376,62 @@ In this scenario, an explicit proxy configuration is built at each topology inst
 
 --------------------------------------------------
 
-### Traffic selector commands - Explicit Proxy (to be used in traffic switching iRule)
+### Traffic selector commands - Transparent Proxy and proxy-in-front (Explicit proxy request HOST evaluation)
+- Call the "target" proc with the following parameters ([topology name], ${sni}, [message])
+  - **[topology name]** is the base name of the defined topology
+  - **${host}** is static here and returns the server name indication value (SNI) for logging
+  - **[message]** is any string message to send to the log (ex. which rule matched)
+  - **return** is added at the end of each command to cancel any further matching
+  - Example: 
+    `call PIFSSLOLIB::target "bypass" ${host} "SRCIP"`
+
+      Source IP Detection (static IP, IP subnet, data group match)
+         SRCIP IP:<ip/subnet>
+         SRCIP DG:<data group name> (address-type data group)
+         if { [call PIFSSLOLIB::SRCIP IP:10.1.0.0/16] } { call PIFSSLOLIB::target "topology name" ${host} "SRCIP" ; return }
+         if { [call PIFSSLOLIB::SRCIP DG:my_sip_list] } { call PIFSSLOLIB::target "topology name" ${host} "SRCIP" ; return }
+
+      Source Port Detection (static port, port range, data group match)
+         SRCPORT PORT:<port/port-range>
+         SRCPORT DG:<data group name> (integer-type data group)
+         if { [call PIFSSLOLIB::SRCPORT PORT:15000] } { call PIFSSLOLIB::target "topology name" ${host} "SRCPORT" ; return }
+         if { [call PIFSSLOLIB::SRCPORT PORT:1000-60000] } { call PIFSSLOLIB::target "topology name" ${host} "SRCPORT" ; return }
+         if { [call PIFSSLOLIB::SRCPORT DG:my-sport-list] } { call PIFSSLOLIB::target "topology name" ${host} "SRCPORT" ; return }
+
+      Destination IP Detection (static IP, IP subnet, data group match)
+         DSTIP IP:<ip/subnet>
+         DSTIP DG:<data group name> (address-type data group)
+         if { [call PIFSSLOLIB::DSTIP IP:93.184.216.34] } { call PIFSSLOLIB::target "topology name" ${host} "DSTIP" ; return }
+         if { [call PIFSSLOLIB::DSTIP DG:my-dip-list] } { call PIFSSLOLIB::target "topology name" ${host} "DSTIP" ; return }
+
+      Destination Port Detection (static port, port range, data group match)
+         DSTPORT PORT:<port/port-range>
+         DSTPORT DG:<data group name> (integer-type data group)
+         if { [call PIFSSLOLIB::DSTPORT PORT:443] } { call PIFSSLOLIB::target "topology name" ${host} "DSTPORT" ; return }
+         if { [call PIFSSLOLIB::DSTPORT PORT:1-1024] } { call PIFSSLOLIB::target "topology name" ${host} "DSTPORT" ; return }
+         if { [call PIFSSLOLIB::DSTPORT DG:my-dport-list] } { call PIFSSLOLIB::target "topology name" ${host} "DSTPORT" ; return }
+
+      HOST Detection (static URL, category match, data group match)
+         HOST URL:<static url>
+         HOST URLGLOB:<static url> (ends_with match)
+         if { [call PIFSSLOLIB::HOST URL:www.example.com] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTURL" ; return }
+         if { [call PIFSSLOLIB::HOST URLGLOB:.example.com] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTURLGLOB" ; return }
+
+         HOST CAT:<category name or list of categories>
+         if { [call PIFSSLOLIB::HOST CAT:/Common/Financial_Data_and_Services] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTCAT" ; return }
+         if { [call PIFSSLOLIB::HOST CAT:$static::URLCAT_Finance_Health] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTCAT" ; return }
+
+         HOST DG:<data group name> (string-type data group)
+         HOST DGGLOB:<data group name> (ends_with match)
+         if { [call PIFSSLOLIB::HOST DG:my-sni-list] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTDG" ; return }
+         if { [call PIFSSLOLIB::HOST DGGLOB:my-sniglob-list] } { call PIFSSLOLIB::target "topology name" ${host} "HOSTDGGLOB" ; return }
+
+      Combinations: above selectors can be used in combinations as required. Example:
+         if { ([call PIFSSLOLIB::SRCIP IP:10.1.0.0/16]) and ([call PIFSSLOLIB::DSTIP IP:93.184.216.34]) }
+
+--------------------------------------------------
+
+### Traffic selector commands - Explicit Proxy (proxy-in-back)
 - Call the "target" proc with the following parameters ([topology name], ${sni}, [message])
   - **[topology name]** is the base name of the defined topology
   - **${host}** is static here and returns the server name indication value (SNI) for logging
