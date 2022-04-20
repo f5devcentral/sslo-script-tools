@@ -1,0 +1,1613 @@
+#!/usr/bin/env bash
+
+##
+# BIG-IP SSLo diagnostics and repair utility
+
+# Version of current file.
+VERSION="1.0.10"
+
+# Colors for messaging prompts.
+COLOR_ERR='\033[0;31m'
+COLOR_INFO='\033[0;32m'
+COLOR_WARN='\033[0;33m'
+COLOR_DBG='\033[0;34m'
+COLOR_NONE='\033[0m'
+
+# Defaults.
+DEFAULT_CONFIG_PROC_TIMEOUT_SECONDS=90
+
+# SSLo iAppLX prefix.
+SSLO_IAPPLX_PREFIX="f5-iappslx-ssl-orchestrator"
+
+# SSLo references.
+SSLO_IAPP_REF="https://localhost/mgmt/shared/iapp"
+SSLO_CONFIG_PROC_BASE_REF="${SSLO_IAPP_REF}/processors"
+SSLO_CONFIG_PROC_REF="${SSLO_CONFIG_PROC_BASE_REF}/${SSLO_IAPPLX_PREFIX}"
+
+# Device identity file.
+DEVICE_ID_FILE="/config/f5-rest-device-id"
+
+# Device version file.
+DEVICE_VERSION_FILE="/VERSION"
+
+# REST device status: ACTIVE.
+DEVICE_STATUS_ACTIVE="ACTIVE"
+
+# REST gossip status: ACTIVE
+GOSSIP_STATUS_ACTIVE="ACTIVE"
+
+# Diagnostic log levels.
+LOG_LEVEL_SEVERE="[SEVERE]"
+LOG_LEVEL_WARN="[WARNING]"
+
+# HA sync targets.
+SYNC_TARGET_ALL="ALL"
+SYNC_TARGET_MCP="MCP"
+SYNC_TARGET_REST="REST"
+
+# All HA sync target values.
+SYNC_TARGET_VALUES=(
+    "${SYNC_TARGET_ALL}"
+    "${SYNC_TARGET_MCP}"
+    "${SYNC_TARGET_REST}"
+)
+
+##
+# All HA sync targets.
+# Targets are sync'ed in the order specified.
+SYNC_TARGETS_ALL=(
+    "${SYNC_TARGET_MCP}"
+    "${SYNC_TARGET_REST}"
+)
+
+##
+# Default HA sync targets.
+# Targets are sync'ed in the order specified.
+# Note: for now the default targets match all targets.
+SYNC_TARGETS_DEFAULT=(
+    "${SYNC_TARGETS_ALL[@]}"
+)
+
+##
+# Timeout for REST worker to become available.
+WAIT_AVAILABLE_TIMEOUT_SECONDS=60
+
+# SSH connection timeout (seconds)
+SSH_CONNECTION_TIMEOUT=3
+
+##
+# Checks if an item is found in a given array.
+#   $1: the element to look for
+#   $2: the array
+# Returns 0 if element has been found, 1 otherwise.
+#
+# Example: if in_array "foo" "${bar[@]}"; then ...
+in_array() {
+    for item in "${@:2}"; do [[ "${item}" == "${1}" ]] && return 0; done
+    return 1
+}
+
+##
+# Logs a green or normal info message (to STDOUT).
+function log_info() {
+    echo -e "${COLOR_INFO}info:${COLOR_NONE} $*"
+}
+
+##
+# Logs a yellow warning message (to STDOUT).
+function log_warning() {
+    echo -e "${COLOR_WARN}warning:${COLOR_NONE} $*"
+}
+
+##
+# Logs a red error message (to STDERR).
+function log_error() {
+    echo -e "${COLOR_ERR}error:${COLOR_NONE} $*" >&2
+}
+
+##
+# Logs a debug trace if required parameter is present.
+function log_debug() {
+    if [[ "${is_verbose}" == "false" ]]; then return; fi
+    echo -e "${COLOR_DBG}debug:${COLOR_NONE} ${FUNCNAME[1]}(): $*" >&2
+}
+
+##
+# Checks/validates the HA/sync environment:
+#   - HA peer passwordless SSH access
+#   - etc.
+function check_env() {
+
+    # For dry-run or local-only repairs no further check required.
+    if [[ "${is_dryrun}" == "true" || "${is_local}" == "true" || "${is_standalone}" == "true" ]]; then
+        return
+    fi
+
+    local msg
+    local error
+    local returncode
+
+    msg="SSH/passwordless access to remote HA peer ${ha_peer}"
+    log_debug "Checking ${msg}..."
+
+    # Capture stderr if any.
+    error=$(${REMOTE_SSH_CMD} "echo" 2>&1 >/dev/null)
+    returncode=$?
+
+    if [[ ${returncode} -gt 0 ]]; then
+        error+="\nPlease check ${msg}"
+        error+="\nSee K13454: Configuring SSH public key authentication on BIG-IP systems:"
+        error+="\nhttps://support.f5.com/csp/article/K13454"
+        log_error "${error}"
+        exit 1
+    fi
+
+    log_debug "Successful ${msg}"
+}
+
+##
+# Diagnoses MCP health/issues.
+function diag_mcp() {
+    log_info "Starting MCP diagnostic..."
+
+    # TODO: Perform MCP/config-sync related diagnostic.
+}
+
+##
+# Detects REST framework issues.
+function diag_rest() {
+    local cmd
+    local msg
+
+    log_info "Starting REST framework diagnostic..."
+
+    if [[ "${is_local}" == "false" && "${is_standalone}" == "false" ]]; then
+        # Verify the sslo application installed.
+        verify_app
+
+        if [[ "${is_dryrun}" == "false" ]]; then
+            verify_blocks "-o"
+            verify_blocks "-o -r"
+        fi
+
+        # Retrieve local and remote device IDs.
+        msg="Retrieving device/machine IDs"
+        cmd="cat ${DEVICE_ID_FILE}"
+
+        log_info "${msg} locally..."
+        local_device_id=$(run_cmd -o "${cmd}")
+
+        log_info "${msg} on remote HA peer [${ha_peer}]..."
+        peer_device_id=$(run_cmd -o -r "${cmd}")
+
+        log_debug "Local device ID: ${local_device_id}"
+        log_debug "Peer device ID: ${peer_device_id}"
+
+        # Check device groups.
+        diag_rest_device_groups
+
+        # Check device states.
+        diag_rest_device_states
+
+        # Check device/machine IDs.
+        diag_rest_device_ids
+
+        # Check device REST framework versions.
+        diag_rest_device_frameworks
+
+        # Check device certificates.
+        diag_rest_device_certificates
+
+        # Check gossip status.
+        diag_rest_gossip
+
+        # Perform a quick Echo gossip test.
+        diag_rest_gossip_test
+    else
+        verify_blocks "-o"
+    fi
+}
+
+##
+# Detects REST framework device certificate issues.
+#
+# The device certificates should be identical on both devices.
+# For consistent results when comparing the list of certificates, we sort
+# the device-certificates jq query by 'machineId'. This way we get the
+# related collection on both devices ordered (the same).
+function diag_rest_device_certificates() {
+    local cmd
+    local msg
+    local url
+
+    local local_device_certificates_json
+    local peer_device_certificates_json
+
+    msg="Checking REST framework device certificates"
+    url="shared/device-certificates"
+    cmd="restcurl ${url} | jq '[[.items[]] | sort_by(.machineId)[] | { \
+        certificateId, \
+        machineId, \
+        certificate}]'"
+
+    log_info "${msg} locally..."
+    local_device_certificates_json=$(run_cmd -o "${cmd}")
+
+    log_info "${msg} on remote HA peer [${ha_peer}]"
+    peer_device_certificates_json=$(run_cmd -o -r "${cmd}")
+
+    log_debug "Local device certificates: ${local_device_certificates_json}"
+    log_debug "Peer device certificates: ${peer_device_certificates_json}"
+
+    if [[ "${local_device_certificates_json}" != "${peer_device_certificates_json}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_SEVERE} Device certificate mismatch detected!\n" \
+            "Local: ${local_device_certificates_json}\n" \
+            "${ha_peer}: ${peer_device_certificates_json}"
+    fi
+}
+
+##
+# Detects REST framework device group issues.
+#
+# The device groups should be identical on both devices.
+# For consistent results when comparing the list of devices, we sort
+# the device-group jq query by 'uuid'. This way we get the related
+# collection on both devices ordered (the same).
+function diag_rest_device_groups() {
+
+    local cmd
+    local msg
+    local url
+
+    msg="Checking REST framework device groups"
+    url="shared/resolver/device-groups/tm-shared-all-big-ips/devices"
+    cmd="restcurl ${url} | jq '[[.items[]] | sort_by(.uuid)[] | { \
+        uuid, \
+        machineId, \
+        state, \
+        address, \
+        version, \
+        build, \
+        restFrameworkVersion, \
+        managementAddress}]'"
+
+    log_info "${msg} locally..."
+    local_device_group_json=$(run_cmd -o "${cmd}")
+
+    log_info "${msg} on remote HA peer [${ha_peer}]"
+    peer_device_group_json=$(run_cmd -o -r "${cmd}")
+
+    log_debug "Local device group: ${local_device_group_json}"
+    log_debug "Peer device group: ${peer_device_group_json}"
+
+    if [[ "${local_device_group_json}" != "${peer_device_group_json}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_SEVERE} Device group mismatch detected!\n" \
+            "Local: ${local_device_group_json}\n" \
+            "${ha_peer}: ${peer_device_group_json}"
+    fi
+}
+
+##
+# Detects REST device framework version issues.
+#
+# Device framework versions have to be the same and matching the TMOS platform
+# versions, across both local and remote devices.
+#
+# We'll be regarding the version, restFrameworkVersion and the TMOS
+# platform version in the following format (example): 16.0.0-0.0.7474
+#
+# For each device we extract the relevant version fields as a JSON blob,
+# from the respective device groups and devices, e.g.:
+# [
+#   {
+#    "uuid": "16d3381a-7e91-44a5-8c47-8bacb17366ca",
+#    "version": "16.0.0",
+#    "build": "0.0.7474",
+#    "restFrameworkVersion": "16.0.0-0.0.7474"
+#  },
+#  {
+#    "uuid": "c3dc043a-7b30-4daa-bb80-2b9e85cc40f5",
+#    "version": "16.0.0",
+#    "build": "0.0.7474",
+#    "restFrameworkVersion": "16.0.0-0.0.7474"
+#   }
+# ]
+#
+# Let's refer to this JSON blob as a device-group 'meta version'.
+#
+# If dg1 and dg2 are the device groups, and d1 and d2 are the devices,
+# local and remote respectively, here are the checks (cross-validations):
+# - dg1.meta_version == dg2.meta_version
+# - dg1.d1.version|restFrameworkVersion == d1.platform_version
+# - dg1.d2.version|restFrameworkVersion == d2.platform_version
+# - dg2.d1.version|restFrameworkVersion == d1.platform_version
+# - dg2.d2.version|restFrameworkVersion == d2.platform_version
+function diag_rest_device_frameworks() {
+    local cmd
+    local msg
+    local local_meta_version_json
+    local peer_meta_version_json
+    local platform_version
+    local rest_version
+
+    msg="Checking version match across device groups..."
+
+    cmd="echo '${local_device_group_json}' | jq '[.[] | \
+        {uuid, version, build, restFrameworkVersion}]'"
+
+    local_meta_version_json=$(run_cmd -o "${cmd}")
+
+    cmd="echo '${peer_device_group_json}' | jq '[.[] | \
+        {uuid, version, build, restFrameworkVersion}]'"
+    peer_meta_version_json=$(run_cmd -o "${cmd}")
+
+    log_debug "Local device group versions: ${local_meta_version_json}"
+    log_debug "Peer device group versions: ${peer_meta_version_json}"
+
+    log_info "${msg}"
+
+    if [[ "${local_meta_version_json}" != "${peer_meta_version_json}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_WARN} Version mismatch across device groups!" \
+            "Local device group: ${local_meta_version_json}\n" \
+            "Remote HA peer [${ha_peer}] device group: ${peer_meta_version_json}"
+    fi
+
+    msg="Checking device REST framework versions"
+
+    # =================================
+    log_info "${msg} locally..."
+    # =================================
+
+    cmd="echo '${local_device_group_json}' | \
+        jq -r --arg local_device_id \"\$local_device_id\" '.[] | \
+        select(.uuid == \$local_device_id) | .version'"
+    platform_version=$(run_cmd -o "${cmd}")
+
+    cmd="echo '${local_device_group_json}' | \
+        jq -r --arg local_device_id \"\$local_device_id\" '.[] | \
+        select(.uuid == \$local_device_id) | .build'"
+    platform_version+=-$(run_cmd -o "${cmd}")
+
+    cmd="echo '${local_device_group_json}' | \
+        jq -r --arg local_device_id \"\$local_device_id\" '.[] | \
+        select(.uuid == \$local_device_id) | .restFrameworkVersion'"
+    rest_version=$(run_cmd -o "${cmd}")
+
+    log_debug "Local REST platform version: ${platform_version}"
+    log_debug "Local REST framework version: ${rest_version}"
+
+    if [[ "${rest_version}" != "${platform_version}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_WARN} REST framework version [${rest_version}]" \
+            "vs. platform version [${platform_version}]" \
+            "mismatch in local device group: ${local_device_group_json}"
+    fi
+
+    if [[ "${platform_version}" != "${local_platform_version}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_WARN} Platform version [${local_platform_version}]" \
+            "mismatch in local device group: ${local_meta_version_json}"
+    fi
+
+    if [[ "${rest_version}" != "${local_platform_version}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_WARN} REST version [${rest_version}]" \
+            "mismatch in local device group: ${local_device_group_json}"
+    fi
+
+    # ==================================================
+    log_info "${msg} on remote HA peer [${ha_peer}]..."
+    # ==================================================
+
+    cmd="echo '${peer_device_group_json}' | \
+        jq -r --arg peer_device_id \"\$peer_device_id\" '.[] | \
+        select(.uuid == \$peer_device_id) | .version'"
+    platform_version=$(run_cmd -o "${cmd}")
+
+    cmd="echo '${peer_device_group_json}' | \
+        jq -r --arg peer_device_id \"\$peer_device_id\" '.[] | \
+        select(.uuid == \$peer_device_id) | .build'"
+    platform_version+=-$(run_cmd -o "${cmd}")
+
+    cmd="echo '${peer_device_group_json}' | \
+        jq -r --arg peer_device_id \"\$peer_device_id\" '.[] | \
+        select(.uuid == \$peer_device_id) | .restFrameworkVersion'"
+    rest_version=$(run_cmd -o "${cmd}")
+
+    log_debug "Remote HA peer [${ha_peer}] REST platform version: ${platform_version}"
+    log_debug "Remote HA peer [${ha_peer}] REST framework version: ${rest_version}"
+
+    if [[ "${rest_version}" != "${platform_version}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_WARN} REST framework version [${rest_version}]" \
+            "vs. platform version [${platform_version}]" \
+            "mismatch in remote HA peer [${ha_peer}] device group: ${peer_device_group_json}"
+    fi
+
+    if [[ "${platform_version}" != "${peer_platform_version}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_WARN} Platform version [${peer_platform_version}]" \
+            "mismatch in remote HA peer [${ha_peer}] device group: ${peer_meta_version_json}"
+    fi
+
+    if [[ "${rest_version}" != "${peer_platform_version}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_WARN} REST version [${rest_version}]" \
+            "mismatch in remote HA peer [${ha_peer}] device group: ${peer_device_group_json}"
+    fi
+}
+
+##
+# Detects REST framework device status issues.
+#
+# Device status has to be 'ACTIVE' for all devices in the device-groups,
+# across both local and remote devices. If d1 and d2 are the devices,
+# and dg1 and dg2 are the device groups, local and remote respectively,
+# here are the checks (validations):
+# - dg1.d1.state == ACTIVE
+# - dg1.d2.state == ACTIVE
+# - dg2.d1.state == ACTIVE
+# - dg2.d2.state == ACTIVE
+#
+# NOTE: most of the times a device status not being active is not critical.
+# That's why we raise awareness as not severe. Still we flag possible issues.
+function diag_rest_device_states() {
+    local cmd
+    local msg
+    local status
+
+    msg="Checking REST framework device states"
+
+    log_info "${msg} locally..."
+
+    # dg1.d1.state == ACTIVE
+    cmd="echo '${local_device_group_json}' | \
+        jq -r --arg local_device_id \"\$local_device_id\" '.[] | \
+        select(.uuid == \$local_device_id) | .state'"
+    status=$(run_cmd -o "${cmd}")
+
+    if [[ "${status}" != "${DEVICE_STATUS_ACTIVE}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_WARN} Invalid status [${status}]" \
+            "for local device [${local_device_id}]," |
+            "in local device group: ${local_device_group_json}"
+    fi
+
+    # dg1.d2.state == ACTIVE
+    cmd="echo '${local_device_group_json}' | \
+        jq -r --arg peer_device_id \"\$peer_device_id\" '.[] | \
+        select(.uuid == \$peer_device_id) | .state'"
+    status=$(run_cmd -o "${cmd}")
+
+    if [[ "${status}" != "${DEVICE_STATUS_ACTIVE}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_WARN} Invalid status [${status}]" \
+            "for peer device [${peer_device_id}]," \
+            "in local device group: ${local_device_group_json}"
+    fi
+
+    log_info "${msg} on remote HA peer [${ha_peer}]..."
+
+    # dg2.d1.state == ACTIVE
+    cmd="echo '${peer_device_group_json}' | \
+        jq -r --arg local_device_id \"\$local_device_id\" '.[] | \
+        select(.uuid == \$local_device_id) | .state'"
+    status=$(run_cmd -o "${cmd}")
+
+    if [[ "${status}" != "${DEVICE_STATUS_ACTIVE}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_WARN} Invalid status [${status}]" \
+            "for local device [${local_device_id}]," \
+            "on remote HA peer [${ha_peer}]" \
+            "device group: ${peer_device_group_json}"
+    fi
+
+    # dg2.d2.state == ACTIVE
+    cmd="echo '${peer_device_group_json}' | \
+        jq -r --arg peer_device_id \"\$peer_device_id\" '.[] | \
+        select(.uuid == \$peer_device_id) | .state'"
+    status=$(run_cmd -o "${cmd}")
+
+    if [[ "${status}" != "${DEVICE_STATUS_ACTIVE}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_WARN} Invalid status [${status}]" \
+            "for peer device [${peer_device_id}]," \
+            "on remote HA peer [${ha_peer}]" \
+            "device group: ${peer_device_group_json}"
+    fi
+}
+
+##
+# Detects REST framework device/machine ID inconsistencies.
+#
+# Compares the ID captured in the DEVICE_ID_FILE (/config/f5-rest-device-id)
+# against the 'uuid' and 'machineId' fields for each device in the device group
+# (tm-shared-all-big-ips). If id1 and id2 are the device IDs, and dg1 and dg2
+# are the device groups, local and remote respectively, here are the checks:
+# - id1 vs. dg1.uuid1 | dg1.machineId1
+# - id2 vs. dg1.uuid2 | dg1.machineId2
+# - id1 vs. dg2.uuid1 | dg2.machineId1
+# - id2 vs. dg2.uuid2 | dg2.machineId2
+function diag_rest_device_ids() {
+    local cmd
+    local machine_id
+    local msg
+
+    msg="Checking REST framework device/machine IDs"
+
+    log_info "${msg} locally..."
+
+    # id1 vs. dg1.uuid1 | dg1.machineId1
+    cmd="echo '${local_device_group_json}' | \
+        jq -r --arg local_device_id \"\$local_device_id\" '.[] | \
+        select(.uuid == \$local_device_id) | .machineId'"
+    machine_id=$(run_cmd -o "${cmd}")
+
+    if [[ "${local_device_id}" != "${machine_id}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_SEVERE} Invalid local device ID [${machine_id}]" \
+            "in local device group: ${local_device_group_json}"
+    fi
+
+    # id2 vs. dg1.uuid2 | dg1.machineId2
+    cmd="echo '${local_device_group_json}' | \
+        jq -r --arg peer_device_id \"\$peer_device_id\" '.[] | \
+        select(.uuid == \$peer_device_id) | .machineId'"
+    machine_id=$(run_cmd -o "${cmd}")
+
+    if [[ "${peer_device_id}" != "${machine_id}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_SEVERE} Invalid peer device ID [${machine_id}]" \
+            "in local device group: ${local_device_group_json}"
+    fi
+
+    log_info "${msg} on remote HA peer [${ha_peer}]..."
+
+    # id1 vs. dg2.uuid1 | dg2.machineId1
+    cmd="echo '${peer_device_group_json}' | \
+        jq -r --arg local_device_id \"\$local_device_id\" '.[] | \
+        select(.uuid == \$local_device_id) | .machineId'"
+    machine_id=$(run_cmd -o "${cmd}")
+
+    if [[ "${local_device_id}" != "${machine_id}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_SEVERE} Invalid local device ID [${machine_id}]" \
+            "on remote HA peer [${ha_peer}] device group: ${peer_device_group_json}"
+    fi
+
+    # id2 vs. dg2.uuid2 | dg2.machineId2
+    cmd="echo '${peer_device_group_json}' | \
+        jq -r --arg peer_device_id \"\$peer_device_id\" '.[] | \
+        select(.uuid == \$peer_device_id) | .machineId'"
+    machine_id=$(run_cmd -o "${cmd}")
+
+    if [[ "${peer_device_id}" != "${machine_id}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_SEVERE} Invalid peer device ID [${machine_id}]" \
+            "on remote HA peer [${ha_peer}] device group: ${peer_device_group_json}"
+    fi
+}
+
+##
+# Detects REST framework gossip issues.
+#
+# The REST gossip status on both devices should be ACTIVE.
+function diag_rest_gossip() {
+    local cmd
+    local msg
+    local status
+    local url
+
+    msg="Checking REST framework gossip/sync status"
+    url="shared/gossip"
+    cmd="restcurl ${url} | jq -r '.status'"
+
+    log_info "${msg} locally..."
+
+    status=$(run_cmd -o "${cmd}")
+    log_debug "Local REST gossip status: ${status}"
+
+    if [[ "${status}" != "${GOSSIP_STATUS_ACTIVE}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_SEVERE} Local REST gossip" \
+            "status not ${GOSSIP_STATUS_ACTIVE}!"
+    fi
+
+    log_info "${msg} on remote HA peer [${ha_peer}]..."
+
+    status=$(run_cmd -o -r "${cmd}")
+    log_debug "Remote HA peer [${ha_peer}] REST gossip status: ${status}"
+
+    if [[ "${status}" != "${GOSSIP_STATUS_ACTIVE}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_SEVERE} Remote HA peer [${ha_peer}]" \
+            "REST gossip status not ${GOSSIP_STATUS_ACTIVE}!"
+    fi
+}
+
+##
+# Performs a simple Echo worker gossip test.
+#
+# - posts arbitrary content/state to local Echo worker
+# - makes sure the remote Echo worker state matches the content posted above
+# - posts arbitrary content/state to remote Echo worker
+# - makes sure the local Echo worker state matches the content posted above
+function diag_rest_gossip_test() {
+    local cmd
+    local content
+    local msg
+    local result
+    local url
+
+    msg="Testing Echo gossip/sync"
+    url="shared/echo"
+
+    # =============================================================
+    log_info "${msg} from local to remote HA peer [${ha_peer}]..."
+    # =============================================================
+
+    # POST Echo state content locally.
+    content="$(uuidgen)"
+    cmd="restcurl -X POST -d '{\"content\" = \"${content}\" }' ${url} | jq -r '.content'"
+    result=$(run_cmd -o "${cmd}")
+    log_debug "Local Echo state content: ${result}"
+
+    # GET Echo state content on remote HA peer.
+    cmd="restcurl ${url} | jq -r '.content'"
+    result=$(run_cmd -o -r "${cmd}")
+
+    # Check Echo state sync.
+    if [[ "${result}" != "${content}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_SEVERE} REST gossip/sync not working" \
+            "from local to remote HA peer [${ha_peer}]"
+    fi
+
+    # =============================================================
+    log_info "${msg} from remote HA peer [${ha_peer}] to local..."
+    # =============================================================
+
+    # POST Echo state content on remote HA peer.
+    content="$(uuidgen)"
+    cmd="restcurl -X POST -d '{\"content\" = \"${content}\" }' ${url} | jq -r '.content'"
+    result=$(run_cmd -o -r "${cmd}")
+    log_debug "Remote HA peer [${ha_peer}] Echo state content: ${result}"
+
+    # GET Echo state content locally.
+    cmd="restcurl ${url} | jq -r '.content'"
+    result=$(run_cmd -o "${cmd}")
+
+    # Check Echo state sync.
+    if [[ "${result}" != "${content}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_SEVERE} REST gossip/sync not working" \
+            "from remote HA peer [${ha_peer}] to local."
+    fi
+}
+
+##
+# Perform the HA sync diagnostic and attempts to detect possible problems.
+# We retrieve here the platform version from the /VERSION file.
+# The related awk command yields a result with the following format (example):
+# 16.0.0-0.0.7474
+function diagnostic() {
+    if [[ "${is_local}" == "false" && "${is_standalone}" == "false" ]]; then
+        local cmd
+        local msg
+
+        # Retrieve local and remote platform versions.
+        msg="Retrieving platform versions"
+
+        log_info "${msg} locally..."
+        cmd="awk '/^Build|^Version/{print\$2}' ${DEVICE_VERSION_FILE} | paste -sd-"
+        local_platform_version=$(run_cmd -o "${cmd}")
+
+        log_info "${msg} on remote HA peer [${ha_peer}]..."
+        peer_platform_version=$(run_cmd -o -r "${cmd}")
+
+        log_debug "Local platform version: ${local_platform_version}"
+        log_debug "Peer platform version: ${local_platform_version}"
+    fi
+
+    # Run diagnostics: MCP, REST.
+    if in_array "${SYNC_TARGET_MCP}" "${sync_targets[@]}"; then diag_mcp; fi
+    if in_array "${SYNC_TARGET_REST}" "${sync_targets[@]}"; then diag_rest; fi
+
+    # Problems?
+    if [[ "${has_problems}" == "true" ]]; then
+        log_warning "Problems detected!"
+        exit 1
+    else
+        log_info "No problems detected!"
+    fi
+}
+
+##
+# Checks if an item is found in a given array.
+#   $1: the element to look for
+#   $2: the array
+# Returns 0 if element has been found, 1 otherwise.
+#
+# Example: if in_array "foo" "${bar[@]}"; then ...
+in_array() {
+    for item in "${@:2}"; do [[ "${item}" == "${1}" ]] && return 0; done
+    return 1
+}
+
+##
+# Runs a given command.
+# Usage: run_cmd [OPTIONS]... COMMAND
+#   -o, --output provides the output of the command (optional); default: /dev/null
+#   -r, --remote runs the command on the remote peer (optional)
+function run_cmd() {
+    if [[ $# -eq 0 ]]; then
+        log_error "Missing command!"
+        exit 1
+    fi
+
+    local cmd=""
+    local is_output="false"
+    local is_remote="false"
+
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            -o|--output)
+                is_output="true"
+                ;;
+            -r|--remote)
+                is_remote="true"
+                ;;
+            -*)
+                log_error "Unknown option: ${1}"
+                exit 1
+                ;;
+            *)
+                cmd+=" ${1:-}"
+                ;;
+        esac
+        shift
+    done
+
+    # Make it pretty: trim leading/trailing/redundant spaces, if any.
+    cmd=$(echo "${cmd}" | awk '{$1=$1};1')
+
+    if [[ -z "${cmd}" ]]; then
+        log_error "Missing command!"
+        exit 1
+    fi
+
+    if [[ "${is_remote}" == "true" ]]; then
+        cmd="${REMOTE_SSH_CMD} ${cmd}"
+    fi
+
+    # Dry-run (simulation) mode?
+    if [[ "${is_dryrun}" == "true" ]]; then
+        # TODO: if cmd contains ? then ...
+        if [[ "${is_output}" == "true" ]]; then
+            echo "?"
+        else
+            echo "${cmd}"; echo
+        fi
+    else
+        # Silence the command when not in verbose mode.
+        if [[ "${is_verbose}" == "false" ]]; then
+            if [[ "${is_remote}" == "false" ]]; then
+                if [[ "${is_output}" == "true" ]]; then
+                    eval "${cmd}"
+                else
+                    eval "${cmd}" > /dev/null 2>&1
+                fi
+            else
+                if [[ "${is_output}" == "true" ]]; then
+                    ${cmd}
+                else
+                    ${cmd} > /dev/null 2>&1
+                fi
+            fi
+        else
+            if [[ "${is_remote}" == "false" ]]; then
+                eval "${cmd}"
+            else
+                ${cmd}
+            fi
+        fi
+    fi
+
+    # Manual (step-by-step) mode?
+    if [[ "${is_manual}" == "true" ]]; then
+        read -rp "Press enter to continue... "
+    fi
+}
+
+##
+# Performs the HA sync according to the given sync targets.
+# This function attempts to normalize the ${sync_targets[@]} array:
+#   - adjust to upper case all entries
+#   - detail all targets
+#   - unique entries
+#   - validate targets
+function sync() {
+    if in_array "${SYNC_TARGET_MCP}" "${sync_targets[@]}"; then sync_mcp; fi
+    if in_array "${SYNC_TARGET_REST}" "${sync_targets[@]}"; then sync_rest; fi
+}
+
+##
+# Runs the commands required for the MCP HA sync.
+function sync_mcp() {
+
+    local cmd
+    local msg
+    local result
+    local local_device
+    local peer_device
+
+    # For local-only repairs do not invoke MCP sync.
+    if [[ "${is_local}" == "true" || "${is_standalone}" == "true" ]]; then
+        return
+    fi
+
+    log_info "Starting MCP HA sync..."
+
+    msg="Initiating CM Config-Sync"
+    cmd="tmsh run cm config-sync"
+    if [[ "${is_force}" == "true" ]]; then cmd+=" force-full-load-push"; fi
+    cmd+=" to-group ${ha_group}"
+    log_info "${msg} locally..."
+    run_cmd "${cmd}"
+
+    log_info "MCP HA sync completed!"
+}
+
+##
+# Runs the commands required for the REST Framework HA sync.
+function sync_rest() {
+    local SLEEP_SECONDS=25
+    local cmd
+    local msg
+    local url
+
+    log_info "Starting REST Framework HA sync..."
+
+    msg="Stopping restjavad"
+    cmd="bigstart stop restjavad"
+    log_info "${msg} locally..."
+    run_cmd "${cmd}"
+    if [[ "${is_local}" == "false" && "${is_standalone}" == "false" ]]; then
+        log_info "${msg} on remote HA peer [${ha_peer}]..."
+        run_cmd -r "${cmd}"
+    fi
+
+    msg="Removing REST Framework device certificate files"
+    cmd="rm -rf /shared/em/ssl.crt/*"
+    log_info "${msg} locally..."
+    run_cmd "${cmd}"
+    if [[ "${is_local}" == "false" && "${is_standalone}" == "false" ]]; then
+        log_info "${msg} on remote HA peer [${ha_peer}]..."
+        run_cmd -r "${cmd}"
+    fi
+
+    if [[ "${is_local}" == "false" && "${is_standalone}" == "false"  && "${is_force}" == "true" ]]; then
+        msg="Removing REST Framework storage"
+        cmd="rm -rf /var/config/rest/storage"
+        log_info "${msg} on remote HA peer [${ha_peer}]..."
+        run_cmd -r "${cmd}"
+
+        msg="Removing REST Framework index"
+        cmd="rm -rf /var/config/rest/index"
+        log_info "${msg} on remote HA peer [${ha_peer}]..."
+        run_cmd -r "${cmd}"
+
+        msg="Copying REST Framework storage"
+        cmd="scp -rB /var/config/rest/storage ${ha_peer}:/var/config/rest/"
+        log_info "${msg} to remote HA peer [${ha_peer}]..."
+        run_cmd "${cmd}"
+
+        msg="Copying REST Framework index"
+        cmd="scp -rB /var/config/rest/index ${ha_peer}:/var/config/rest/"
+        log_info "${msg} to remote HA peer [${ha_peer}]..."
+        run_cmd "${cmd}"
+    fi
+
+    msg="Starting restjavad"
+    cmd="bigstart start restjavad"
+    log_info "${msg} locally..."
+    run_cmd "${cmd}"
+    if [[ "${is_local}" == "false" && "${is_standalone}" == "false" ]]; then
+        log_info "${msg} on remote HA peer [${ha_peer}]..."
+        run_cmd -r "${cmd}"
+    fi
+
+    msg="Removing REST Framework sync conflicts"
+    url="shared/gossip-conflicts"
+    cmd="restcurl -X DELETE ${url}"
+    log_info "${msg} locally..."
+    wait_for_available "${url}"
+    run_cmd "${cmd}"
+    if [[ "${is_local}" == "false" && "${is_standalone}" == "false" ]]; then
+        log_info "${msg} on remote HA peer [${ha_peer}]..."
+        wait_for_available "${url}" "${REMOTE_SSH_CMD}"
+        run_cmd -r "${cmd}"
+    fi
+
+    msg="Removing REST Framework device certificates"
+    url="shared/device-certificates"
+    cmd="restcurl -X DELETE ${url}"
+    log_info "${msg} locally..."
+    wait_for_available "${url}"
+    run_cmd "${cmd}"
+    if [[ "${is_local}" == "false" && "${is_standalone}" == "false" ]]; then
+        log_info "${msg} on remote HA peer [${ha_peer}]..."
+        wait_for_available "${url}" "${REMOTE_SSH_CMD}"
+        run_cmd -r "${cmd}"
+    fi
+
+    msg="Generating REST Framework device key-pair"
+    url="shared/device-key-pair"
+    cmd="restcurl -X POST -d '{\"generateKeyPair\": true}' ${url}"
+    log_info "${msg} locally..."
+    wait_for_available "${url}"
+    run_cmd "${cmd}"
+    if [[ "${is_local}" == "false" && "${is_standalone}" == "false" ]]; then
+        log_info "${msg} on remote HA peer [${ha_peer}]..."
+        wait_for_available "${url}" "${REMOTE_SSH_CMD}"
+        run_cmd -r "${cmd}"
+    fi
+
+    msg="Removing REST Framework devices"
+    url="shared/resolver/device-groups/tm-shared-all-big-ips/devices"
+    cmd="restcurl -X DELETE ${url}"
+    log_info "${msg} locally..."
+    wait_for_available "${url}"
+    run_cmd "${cmd}"
+    if [[ "${is_local}" == "false" && "${is_standalone}" == "false" ]]; then
+        log_info "${msg} on remote HA peer [${ha_peer}]..."
+        wait_for_available "${url}" "${REMOTE_SSH_CMD}"
+        run_cmd -r "${cmd}"
+    fi
+
+    msg="Restarting restjavad, restnoded"
+    cmd="bigstart restart restjavad restnoded"
+    log_info "${msg} locally..."
+    run_cmd "${cmd}"
+    if [[ "${is_local}" == "false" && "${is_standalone}" == "false" ]]; then
+        log_info "${msg} on remote HA peer [${ha_peer}]..."
+        run_cmd -r "${cmd}"
+    fi
+
+    if [[ "${is_dryrun}" == "false" ]]; then
+        sleep ${SLEEP_SECONDS}s
+
+        verify_blocks "-o"
+        if [[ "${is_local}" == "false" && "${is_standalone}" == "false" ]]; then
+            verify_blocks "-o -r"
+        fi
+    fi
+
+    log_info "REST Framework HA sync completed!"
+}
+
+##
+# Waits for REST worker to become available.
+#   $1: REST worker URL (e.g. shared/resolver/device-groups/tm-shared-all-big-ips/devices)
+#   $2: remote SSH command (optional) (example: ${REMOTE_SSH_CMD})
+function wait_for_available() {
+    if [[ -z "${1}" ]]; then
+        log_error "Missing REST worker URL!"
+        exit 1
+    fi
+
+    local SLEEP_SECONDS=5
+    local timeout=${WAIT_AVAILABLE_TIMEOUT_SECONDS}
+    local url="${1}"
+    local cmd="restcurl ${url}/available"
+    local msg="Waiting for REST worker [${url}] to become available"
+    local result
+
+    # Adjust command for remote SSH access, if necessary.
+    if [[ -n "${2:-}" ]]; then
+        msg="${ha_peer}: ${msg}"
+        cmd="${2} ${cmd}"
+    fi
+
+    log_debug "${msg}"
+
+    # Dry-run (simulation) mode?
+    if [[ "${is_dryrun}" == "true" ]]; then
+        log_debug "${cmd}"
+        return
+    fi
+
+    while [[ ${timeout} -ge ${SLEEP_SECONDS} ]]; do
+        result="$($cmd)"
+
+        if [[ "${result}" == "{}" ]]; then
+            return
+        fi
+
+        log_debug "${msg} (${timeout}s remaining)..."
+        sleep ${SLEEP_SECONDS}s
+
+        ((timeout=timeout-SLEEP_SECONDS))
+    done
+
+    log_error "${msg} timed out after ${WAIT_AVAILABLE_TIMEOUT_SECONDS} seconds."
+    exit 1
+}
+
+##
+# Parses input parameters.
+function parse_input() {
+    if [[ $# -eq 0 ]]; then
+        show_usage
+        exit 0
+    fi
+
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            --diagnostic)
+                is_diagnostic="true"
+                ;;
+            -d|--dryrun)
+                is_dryrun="true"
+                ;;
+            -D|--devicegroup)
+                if [[ -z "${2:-}" || ${2:-} == -* ]]; then
+                    log_error "Missing HA device group name!"
+                    show_usage
+                    exit 1
+                fi
+                ha_group="${2}"; shift
+
+                # Ignore any other value and stop at the next option parameter.
+                for opt in "${@:2}"; do
+                    if [[ ${opt} == -* ]]; then break; fi
+                    shift
+                done
+                ;;
+            -f|--force)
+                is_force="true"
+                ;;
+            -h|--help)
+                show_usage
+                exit 0
+                ;;
+            -H|--host)
+                if [[ -z "${2:-}" || ${2:-} == -* ]]; then
+                    log_error "Missing HA peer!"
+                    show_usage
+                    exit 1
+                fi
+
+                local ha_peers=()
+
+                # Stop at the next option parameter.
+                for opt in "${@:2}"; do
+                    if [[ ${opt} == -* ]]; then break; fi
+                    ha_peers+=("${opt}"); shift
+                done
+
+                # For now take only one value (first), ignore the rest.
+                ha_peer=${ha_peers[0]}
+                if [[ ${#ha_peers[@]} -gt 1 ]]; then
+                    log_warning "Expecting a single HA peer [${ha_peer}]." \
+                        "Discarding the others..."
+                fi
+                ;;
+            -m|--manual)
+                is_manual="true"
+                ;;
+            -s|--stand-alone)
+                is_standalone="true"
+                ;;
+            -t|--target)
+                if [[ -z "${2:-}" || ${2:-} == -* ]]; then shift; continue; fi
+                sync_targets=()
+
+                # Stop at the next option parameter.
+                for opt in "${@:2}"; do
+                    if [[ ${opt} == -* ]]; then break; fi
+                    sync_targets+=("${opt}"); shift
+                done
+                ;;
+            -v|--verbose)
+                is_verbose="true"
+                ;;
+            -V|--version)
+                echo ${VERSION}
+                exit 0
+                ;;
+            -*)
+                log_error "Unknown option: ${1}"
+                show_usage
+                exit 1
+                ;;
+            *)
+                validate_input
+                ;;
+        esac
+        shift
+    done
+}
+
+##
+# Parses targets (REST, MCP, etc.)
+function parse_targets() {
+    local targets=()
+
+    # Adjust to uppercase and make sure we have unique entries.
+    sync_targets=( "${sync_targets[@]^^}" )
+
+    for sync_target in "${sync_targets[@]}"; do
+        if ! in_array "${sync_target}" "${SYNC_TARGET_VALUES[@]}"; then
+            log_warning "Ignoring unknown HA sync target: ${sync_target}"
+            continue
+        fi
+
+        if ! in_array "${sync_target}" "${targets[@]:-}"; then
+            targets+=("${sync_target}")
+        fi
+    done
+    # All targets?
+    if in_array "${SYNC_TARGET_ALL}" "${sync_targets[@]}"; then
+        targets=("${SYNC_TARGETS_ALL[@]}")
+    fi
+
+    sync_targets=("${targets[@]:-}")
+}
+
+##
+# Verifies the SSLo app running.
+#
+function verify_app() {
+    local query_cmd
+    local query_id
+    local cmd
+    local msg
+    local url
+
+    msg="Checking SSLo package installed"
+    url="shared/iapp/package-management-tasks"
+    query_cmd="restcurl ${url} -X POST -d '{\"operation\":\"QUERY\"}' | jq -r .id"
+
+    log_info "${msg} locally..."
+    query_id=$(run_cmd -o "${query_cmd}")
+    cmd="restcurl ${url}/${query_id} | jq -r '.queryResponse[] | \
+        select(.name == \"f5-iappslx-ssl-orchestrator\") | .packageName'"
+    local_rpm_version=$(run_cmd -o "${cmd}")
+    if [[ "${local_rpm_version}" == "" ]]; then
+        local_rpm_version="Not Installed"
+    fi
+
+    log_info "${msg} on remote HA peer [${ha_peer}]"
+    query_id=$(run_cmd -o -r "${query_cmd}")
+    cmd="restcurl ${url}/${query_id} | jq -r '.queryResponse[] | \
+        select(.name == \"f5-iappslx-ssl-orchestrator\") | .packageName'"
+    peer_rpm_version=$(run_cmd -o -r "${cmd}")
+    if [[ "${peer_rpm_version}" == "" ]]; then
+        peer_rpm_version="Not Installed"
+    fi
+
+    if [[ "${local_rpm_version}" != "${peer_rpm_version}" ]]; then
+        has_problems="true"
+        log_warning "${LOG_LEVEL_SEVERE} Device SSLo RPM mismatch detected!\n" \
+            "Local: ${local_rpm_version}\n" \
+            "${ha_peer}: ${peer_rpm_version}"
+        log_warning "It is recommended that you verify and install the correct SSLo RPM\n" \
+            "on device(s) as needed and then run this command with the --force option!"
+        exit 1
+    fi
+}
+
+##
+# Verifies and repairs sslo blocks.
+function verify_blocks() {
+    local ids=()
+    local count
+    local msg
+    local suffix
+    local output
+    local dg_data
+    local not_in_dg
+    local all_blocks_json
+    local sslo_blocks_json
+    local sslo_json
+    local sslo_json2
+
+    msg="Verifying all SSLo blocks on"
+
+    if [[ "${1}" == "-o -r" ]]; then
+        suffix="remote HA peer [${ha_peer}]"
+    else
+        suffix="local device"
+    fi
+
+    # Retrieve the entire set of iapp blocks
+    log_info "${msg} ${suffix}..."
+    cmd="restcurl /shared/iapp/blocks"
+    all_blocks_json=$(run_cmd $1 "${cmd}")
+
+    # Retrieve the IDs of relaven sslo blocks
+    sslo_blocks_json=$(echo "${all_blocks_json}" | jq -r ".items[] | \
+        select(.name | startswith(\"sslo\")) |select(.name | \
+        startswith(\"sslo_ob\") | not) | .id" | sed "/^\s*$/d" | sort | uniq)
+
+    # Retrive the blocks from the dependency-graph
+    dg_data=$(echo "${all_blocks_json}" | jq -r ".items[] | \
+        select(.name == \"f5-ssl-orchestrator-dg-data\") | \
+        .inputProperties[] | .value[].data.selfLink" | \
+        sed "/^\s*$/d" | awk -F 'blocks/' '{print $2}' | sort)
+
+    # Determine if any blocks exist that are not included in the dependency-graph
+    not_in_dg=($(comm -13 <(printf '%s\n' "${dg_data[@]}" | LC_ALL=C sort) \
+        <(printf '%s\n' "${sslo_blocks_json[@]}" | LC_ALL=C sort)))
+    count=$(echo "${#not_in_dg[@]}")
+
+    if [[ ${count} -gt 0 ]]; then
+        has_problems="true"
+
+        if [[ "${is_diagnostic}" == "true" ]]; then
+            log_warning "Found ${#not_in_dg[@]} duplicate block(s) on ${suffix}!"
+        else
+            log_info "Removing duplicate block(s) on ${suffix}..."
+            for id in "${not_in_dg[@]}";
+            do
+                cmd="restcurl -X DELETE /shared/iapp/blocks/${id}"
+                run_cmd $1 "${cmd}" > /dev/null
+            done
+        fi
+    fi
+
+    # Retrieve all SSLo blocks (gather only relevant information).
+    sslo_blocks_json=$(echo "${all_blocks_json}" | jq -r "[.items[] | \
+        select(.configurationProcessorReference.link | startswith(\"${SSLO_CONFIG_PROC_REF}\")) | \
+        {id, name, state, configProcessorTimeoutSeconds, configurationProcessorReference}]")
+    count=$(echo "${sslo_blocks_json}" | jq -r ". | length")
+    msg="SSLo blocks (total): ${count}"
+    log_debug "${msg}"
+
+    # Retrieve SSLo templates.
+    output=$(echo "${sslo_blocks_json}" | jq -r ".[] | \
+        select(.state == \"TEMPLATE\") | .name")
+    count=$(echo "${output}" | sed "/^\s*$/d" | wc -l)
+    msg="SSLo templates: ${count}"
+    log_debug "${msg}"
+
+    # Retrieve healthy SSLo blocks (no templates).
+    sslo_json=$(echo "${sslo_blocks_json}" | jq -r "[.[] | \
+        select(.state != \"ERROR\" and .state != \"TEMPLATE\") | \
+        {name, state, configurationProcessorReference}]")
+
+    # Healthy SSLo general settings.
+    output=$(echo "${sslo_json}" | jq -r ".[] | \
+        select(.configurationProcessorReference.link | \
+        endswith(\"${SSLO_IAPPLX_PREFIX}-general-settings\")) | .name")
+    count=$(echo "${output}" | sed "/^\s*$/d" | wc -l)
+    msg="SSLo general settings: ${count}"
+    log_debug "${msg}"
+    
+    # Healthy SSLo topologies.
+    output=$(echo "${sslo_json}" | jq -r ".[] | \
+        select(.configurationProcessorReference.link | \
+        endswith(\"${SSLO_IAPPLX_PREFIX}-topology\")) | .name")
+    count=$(echo "${output}" | sed "/^\s*$/d" | wc -l)
+    msg="SSLo topologies: ${count}"
+    log_debug "${msg}"
+
+    # Healthy SSLo services.
+    output=$(echo "${sslo_json}" | jq -r ".[] | \
+        select(.configurationProcessorReference.link | \
+        endswith(\"${SSLO_IAPPLX_PREFIX}-service\")) | .name")
+    count=$(echo "${output}" | sed "/^\s*$/d" | wc -l)
+    msg="SSLo services: ${count}"
+    log_debug "${msg}"
+
+    # Healthy SSLo service chains.
+    output=$(echo "${sslo_json}" | jq -r ".[] | \
+        select(.configurationProcessorReference.link | \
+        endswith(\"${SSLO_IAPPLX_PREFIX}-service-chain\")) | .name")
+    count=$(echo "${output}" | sed "/^\s*$/d" | wc -l)
+    msg="SSLo service chains: ${count}"
+    log_debug "${msg}"
+
+    # Healthy SSLo security policies.
+    output=$(echo "${sslo_json}" | jq -r ".[] | \
+        select(.configurationProcessorReference.link | \
+        endswith(\"${SSLO_IAPPLX_PREFIX}-policy\")) | .name")
+    count=$(echo "${output}" | sed "/^\s*$/d" | wc -l)
+    msg="SSLo security policies: ${count}"
+    log_debug "${msg}"
+
+    # Healthy SSLo configurations.
+    output=$(echo "${sslo_json}" | jq -r ".[] | \
+        select(.configurationProcessorReference.link | \
+        endswith(\"${SSLO_IAPPLX_PREFIX}-tls\")) | .name")
+    count=$(echo "${output}" | sed "/^\s*$/d" | wc -l)
+    msg="SSLo configurations: ${count}"
+    log_debug "${msg}"
+
+    # Healthy SSLo networks.
+    output=$(echo "${sslo_json}" | jq -r ".[] | \
+        select(.configurationProcessorReference.link | \
+        endswith(\"${SSLO_IAPPLX_PREFIX}-network\")) | .name")
+    count=$(echo "${output}" | sed "/^\s*$/d" | wc -l)
+    msg="SSLo networks: ${count}"
+    log_debug "${msg}"
+
+    # Bad SSLo blocks: ERROR state.
+    sslo_json=$(echo "${sslo_blocks_json}" | jq "[.[] | \
+        select(.state == \"ERROR\") | \
+        select((.name | startswith(\"proxy-f5-ssl-orchestrator\")) or \
+        (.name | startswith(\"sslo_ob_\"))) | \
+        {id, name, state}]")
+
+    # Bad SSLo blocks: in BINDING state.
+    sslo_json2=$(echo "${sslo_blocks_json}" | jq "[.[] | \
+        select(.state == \"BINDING\") | \
+        {id, name, state}]")
+
+    # Merge the two JSON arrays (proxy/ERROR state with BINDING state).
+    sslo_json=$(jq --argjson arr1 "${sslo_json}" --argjson arr2 "${sslo_json2}" -n "\$arr2 + \$arr1")
+
+    # Bad SSLo block IDs.
+    mapfile -t ids < <(echo "${sslo_json}" | jq -r ".[] | .id")
+    count=${#ids[@]}
+
+    if [[ ${count} -gt 0 ]]; then
+        has_problems="true"
+
+        if [[ "${is_diagnostic}" == "true" ]]; then
+            msg="Found ${count} block(s) in bad state on $suffix!"
+            log_warning "${msg}"
+            # Bad SSLo block names.
+            output=$(echo "${sslo_json}" | jq -r ".[] | [.name, .state] | \"\(.[0]) [\(.[1])]\"")
+            log_debug "\n${output}"
+        else
+            if [[ "${is_diagnostic}" == "false" ]]; then
+                # SSLo block IDs in ERROR state.
+                mapfile -t ids < <(echo "${sslo_json}" | jq -r ".[] | select(.state == \"ERROR\") | .id")
+                count=${#ids[@]}
+
+                if [[ ${count} -gt 0 ]]; then
+                    msg="Removing ${count} block(s) in ERROR state on ${suffix}..."
+                    log_info "${msg}"
+
+                    for id in "${ids[@]}"; do
+                        cmd="restcurl -X DELETE /shared/iapp/blocks/${id}"
+                        run_cmd $1 "${cmd}" > /dev/null
+                    done
+                fi
+
+                # SSLo block IDs in BINDING state.
+                mapfile -t ids < <(echo "${sslo_json}" | jq -r ".[] | select(.state == \"BINDING\") | .id")
+                count=${#ids[@]}
+
+                if [[ ${count} -gt 0 ]]; then
+                    msg="Removing ${count} block(s) in BINDING state on ${suffix}..."
+                    log_info "${msg}"
+
+                    # Blocks in BINDING state should first be PATCH-ed to UNBOUND, before deleting.
+                    for id in "${ids[@]}"; do
+                        cmd="restcurl -X PATCH -d \"{\"state\": \"UNBOUND\"}\" /shared/iapp/blocks/${id}"
+                        run_cmd $1 "${cmd}" > /dev/null
+
+                        cmd="restcurl -X DELETE /shared/iapp/blocks/${id}"
+                        run_cmd $1 "${cmd}" > /dev/null
+                    done
+                fi
+
+                # SSLo block IDs in UNBINDING state.
+                mapfile -t ids < <(echo "${sslo_json}" | jq -r ".[] | select(.state == \"UNBINDING\") | .id")
+                count=${#ids[@]}
+
+                if [[ ${count} -gt 0 ]]; then
+                    msg="Removing ${count} block(s) in UNBINDING state on ${suffix}..."
+                    log_info "${msg}"
+
+                    # Blocks in UNBINDING state should first be PATCH-ed to UNBOUND, before deleting.
+                    for id in "${ids[@]}"; do
+                        cmd="restcurl -X PATCH -d \"{\"state\": \"UNBOUND\"}\" /shared/iapp/blocks/${id}"
+                        run_cmd $1 "${cmd}" > /dev/null
+
+                        cmd="restcurl -X DELETE /shared/iapp/blocks/${id}"
+                        run_cmd $1 "${cmd}" > /dev/null
+                    done
+                fi
+            fi
+        fi
+    fi
+
+    # Retrieve SSLo blocks with config processor timeout smaller than minimum allowed.
+    # Some exceptions are needed.
+    sslo_json=$(echo "${sslo_blocks_json}" | jq "[.[] | \
+        select(.name | endswith(\"f5-ssl-orchestrator-topology-CREATE\") | not) | \
+        select(.name | endswith(\"f5-ssl-orchestrator-tls-CREATE\") | not) | \
+        select(.configProcessorTimeoutSeconds < ${deploy_timeout}) | \
+        {id, name, configProcessorTimeoutSeconds}]")
+
+    # IDs of SSLo blocks with low config processor timeout.
+    mapfile -t ids < <(echo "${sslo_json}" | jq -r ".[] | .id")
+    count=${#ids[@]}
+
+    # PATCH configProcessorTimeoutSeconds where needed.
+    if [[ ${count} -gt 0 ]]; then
+
+        has_problems="true"
+
+        if [[ "${is_diagnostic}" == "true" ]]; then
+            msg="Found ${count} blocks with low config processor timeouts on"
+            log_warning "${msg} ${suffix}!"
+
+            # SSLo block names and timeouts.
+            output=$(echo "${sslo_json}" | jq -r ".[] | \
+                [.name, .configProcessorTimeoutSeconds] | \
+                \"\(.[0]): \(.[1])s\"")
+            log_debug "\n${output}"
+        else
+            log_info "Changing the config processor timeout to ${deploy_timeout}s on ${suffix}..."
+
+            for id in "${ids[@]}"; do
+                cmd="restcurl -X PATCH -d \"{\"configProcessorTimeoutSeconds\": \
+                    ${deploy_timeout}}\" /shared/iapp/blocks/${id}"
+                run_cmd $1 "${cmd}" > /dev/null
+            done
+        fi
+    fi
+
+    if [[ ! -z ${username} && ! -z ${password} ]]; then
+        msg="Saving current block state on ${suffix}..."
+        log_info "${msg}"
+
+        cmd="restcurl -u ${username}:${password} ${SSLO_IAPP_REF}/f5-iappslx-ssl-orchestrator/mcpBlockIO -X POST -d '{\"operation\": \"save\"}'"
+        login_response=$(run_cmd $1 "${cmd}" | jq .command)
+        if [[ ${login_response} == "null" ]]; then
+            log_warning "Failed to save current block state on ${suffix}..."
+        fi
+    fi
+}
+
+function show_usage() {
+    echo -e "BIG-IP SSLo diagnostics and repair utility"
+    echo -e "Usage: ${PROG} [OPTIONS]..."
+    echo -e "\t -d, --dryrun \t\t\t Dry-run (simulation) mode"
+    echo -e "\t -D, --devicegroup NAME \t Specifies the HA device group name"
+    echo -e "\t   , --diagnostic \t\t Runs a diagnostic and attempts to detect possible HA sync problems"
+    echo -e "\t -f, --force \t\t\t Enforces a more coercive HA sync (see README for details)"
+    echo -e "\t -h, --help \t\t\t Displays help text"
+    echo -e "\t -H, --host HA_PEER \t\t Specifies the HA sync peer"
+    echo -e "\t -m, --manual \t\t\t Manual (step-by-step) mode"
+    echo -e "\t -s, --stand-alone \t\t Runs on this stand-alone device that is not part of a failover group"
+    echo -e "\t -t, --target [NAMES]... \t Specifies the HA sync target(s) [${SYNC_TARGET_VALUES[*]}]. Default: ${SYNC_TARGET_ALL}"
+    echo -e "\t -v, --verbose \t\t\t Provides additional (debug) information"
+    echo -e "\t -V, --version \t\t\t Displays the current version of this script"
+    echo -e "Examples:"
+    echo -e "\t ${PROG} -D ha-failover -H 10.192.228.78 --diagnostic"
+    echo -e "\t ${PROG} -D ha-failover -H 10.192.228.78"
+    echo -e "\t ${PROG} --stand-alone --diagnostic"
+    echo -e "\t ${PROG} --stand-alone"
+}
+
+##
+# Validates input parameters.
+function validate_input() {
+    local cmd
+    local result
+
+    # Must always run against a stand-alone device or against an ha-group.
+    if [[ "${is_standalone}" == "false" && -z "${ha_group}" ]]; then
+        if [[ ! -z "${ha_peer}" ]]; then
+            log_error "You must provide the device-group name to run against a peer."
+        else
+            log_error "You must specify if this is a stand-alone device or provide the device-group name."
+        fi
+        show_usage
+        exit 1
+    elif [[ "${is_standalone}" == "false" && -z "${ha_peer}" ]]; then
+        is_local="true"
+    elif [[ "${is_standalone}" == "true" && ( ! -z "${ha_peer}" || ! -z "${ha_group}" ) ]]; then
+        log_error "You may only specify this device as stand-alone or provide a device-group name."
+        show_usage
+        exit 1
+    elif [[ ! -z "${ha_peer}" && -z "${ha_group}" ]]; then
+        log_error "You must provide a device-group when you provide an HA peer."
+        show_usage
+        exit 1
+    elif [[ "${is_standalone}" == "true" && -z "${ha_group}" ]]; then
+        return
+    fi
+
+    log_info "Verifying local device belongs to ${ha_group} device group..."
+    cmd="tmsh list cm device one-line |grep self-device |awk '{print \$3}'"
+    local_device=$(run_cmd -o "${cmd}")
+
+    cmd="tmsh list cm device-group ${ha_group} all-properties one-line |awk -F 'devices | full-load-on-sync' '{print \$2}'|grep ${local_device}"
+    result=$(run_cmd -o "${cmd}")
+    if [[ -z "${result}" ]]; then
+        log_error "Local device must be a member of ${ha_group} device group!"
+        exit 1
+    fi
+
+    if [[ "${is_local}" == "true" ]]; then
+        return
+    fi
+
+    log_info "Verifying peer device belongs to ${ha_group} device group..."
+    cmd="tmsh list cm device one-line |grep ${ha_peer} |awk '{print \$3}'"
+    peer_device=$(run_cmd -o "${cmd}")
+
+    cmd="tmsh list cm device-group ${ha_group} all-properties one-line |awk -F 'devices | full-load-on-sync' '{print \$2}'|grep ${peer_device}"
+    result=$(run_cmd -o "${cmd}")
+    if [[ -z "${result}" ]]; then
+        log_error "Peer device must be a member of ${ha_group} device group!"
+        exit 1
+    fi
+}
+
+function request_credentials() {
+    while true; do
+        echo "Please enter your BIG-IP Admin account credentials."
+        IFS= read -p 'Enter Username: ' username
+        IFS= read -s -p 'Enter Password: ' password
+        echo ""
+
+        cmd="restcurl -u ${username}:${password} ${SSLO_IAPP_REF}/blocks"
+        login_response=$(run_cmd -o "${cmd}" | jq .selfLink)
+        if [[ ${login_response} == '"https://localhost/mgmt/shared/iapp/blocks"' ]]; then
+            return
+        fi
+        log_error "The credentials provided appear to be invalid."
+    done
+}
+
+# # # # # # # # # #
+# Main entry point.
+# # # # # # # # # #
+
+set -Euo pipefail
+
+PROG=${0##*/}
+
+deploy_timeout=${DEFAULT_CONFIG_PROC_TIMEOUT_SECONDS}
+ha_group=""
+ha_peer=""
+is_diagnostic="false"
+is_dryrun="false"
+is_force="false"
+is_local="false"
+is_manual="false"
+is_standalone="false"
+is_verbose="false"
+has_problems="false"
+local_device_id=""
+local_device_group_json=""
+local_platform_version=""
+peer_device_id=""
+peer_device_group_json=""
+peer_platform_version=""
+sync_targets=( "${SYNC_TARGETS_DEFAULT[@]}" )
+username=""
+password=""
+
+# Parse input parameters.
+parse_input "$@"
+
+REMOTE_SSH_CMD="ssh -o ConnectTimeout=${SSH_CONNECTION_TIMEOUT} -o BatchMode=yes ${ha_peer}"
+
+validate_input
+check_env
+parse_targets
+
+if [[ "${is_diagnostic}" == "true" ]]; then
+    diagnostic
+else
+    if [[ "${is_dryrun}" == "false" ]]; then
+        required_version="16.1.0"
+        local_version=$(awk '/^Version/{print $2}' ${DEVICE_VERSION_FILE} | paste -sd-)
+        if [[ "$(printf '%s\n' "${required_version}" "${local_version}" | sort -V | head -n1)" = "${required_version}" ]]; then
+            request_credentials
+        fi
+    fi
+    sync
+fi
