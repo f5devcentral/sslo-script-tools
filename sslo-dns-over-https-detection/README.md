@@ -35,10 +35,10 @@ Configuration in the DoH detection and logging iRule is performed through a set 
 
   - **static::URLDB_LICENSED**: (off=0, on=1) the DoH detection iRule can use URL categorization to perform DoH blackholing. If subscription-based URLDB is licensed and provisioned, you can enable this (set to 1) to search the URLDB categories. Otherwise, set to 0 and continue to use custom URL categories.
 
-  - **static::BLACKHOLE_URLS**: (off=empty, on=[list of category names]) if DoH blackholing is desired, add the list of URL categories to search here. This can be a combination of URLDB categories and/or custom URL categories. Leave it empty to disable URL categorization. For example:
+  - **static::BLACKHOLE_URLCAT**: (off=empty, on=[list of category names]) if DoH blackholing is desired, add the list of URL categories to search here. This can be a combination of URLDB categories and/or custom URL categories. Leave it empty to disable URL categorization. For example:
   
       ```
-      set static::BLACKHOLE_URLS {
+      set static::BLACKHOLE_URLCAT {
          "/Common/Advanced_Malware_Command_and_Control"
          "/Advanced_Malware_Payloads"
          "/Common/Spyware_and_Adware"
