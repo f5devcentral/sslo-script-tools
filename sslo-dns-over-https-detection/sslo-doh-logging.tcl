@@ -1,11 +1,12 @@
 ## Rule: SSL Orchestrator DNS-over-HTTPS detection, logging and blackholing
 ## Author: Kevin Stewart
-## Version: 1, 1/2021
+## Version: 2, 10/2022
 ## Function: Creates a mechanism to detect, log, and potentially blackhole DNS-over-HTTPS requests through an SSL Orchestrator outbound topology.
 ## Instructions: 
 ##  - Under Local Traffic -> iRules in the BIG-IP UI, import the required iRule.
 ##  - In the SSL Orchestrator UI, under the Interception Rules tab, click on the interception rule to edit (typically ending with "-in-t"), and at the bottom of this configuration page, add the iRule and then (re)deploy.
 ##  - If using the DoH detection and logging iRule, additional configuration is required (see README).
+
 when RULE_INIT {
     ## User-defined: send log traffic to local syslog facility (not recommended under load)
     ## Disabled (value: 0) or enabled (value: 1)
@@ -23,8 +24,16 @@ when RULE_INIT {
     ## User-defined: generate blackhole DNS responses for these URL categories.
     ## Disabled (value: empty) or enabled (value: names of URL categories to block)
     ## If URLDB is not licensed and provisioned, this list can still contain local custom URL categories
-    set static::BLACKHOLE_URLS {
-
+    ## 
+    ## For custom URL categories, enter the URLs to block in this format: https://[domain]/. Example:
+    ##   https://www.example.com/
+    ## 
+    ## Add the URL categories to the following block. Example:
+    ##   set static::BLACKHOLE_URLCAT {
+    ##      /Common/block-doh-urls
+    ##   }
+    set static::BLACKHOLE_URLCAT {
+        
     }
     
     ## User-defined: if enabled, generate blachole DNS responses for these record types
@@ -43,9 +52,9 @@ proc DOH_URL_BLOCK { id name ver hsl } {
     set name [lindex [split ${name} ":"] 1]
     
     if { ${static::URLDB_LICENSED}} {
-        set match 0 ; if { [llength ${static::BLACKHOLE_URLS}] > 0 } { set res [CATEGORY::lookup "https://${name}/" request_default_and_custom] ; foreach url ${res} { if { [lsearch -exact ${static::BLACKHOLE_URLS} ${url}] >= 0 } { set match 1 } } }
+        set match 0 ; if { [llength ${static::BLACKHOLE_URLCAT}] > 0 } { set res [CATEGORY::lookup "https://${name}/" request_default_and_custom] ; foreach url ${res} { if { [lsearch -exact ${static::BLACKHOLE_URLCAT} ${url}] >= 0 } { set match 1 } } }
     } else {
-        set match 0 ; if { [llength ${static::BLACKHOLE_URLS}] > 0 } { set res [CATEGORY::lookup "https://${name}/" custom] ; foreach url ${res} { if { [lsearch -exact ${static::BLACKHOLE_URLS} ${url}] >= 0 } { set match 1 } } }
+        set match 0 ; if { [llength ${static::BLACKHOLE_URLCAT}] > 0 } { set res [CATEGORY::lookup "https://${name}/" custom] ; foreach url ${res} { if { [lsearch -exact ${static::BLACKHOLE_URLCAT} ${url}] >= 0 } { set match 1 } } }
     }
 
     if { ${match} } {
@@ -169,7 +178,8 @@ when HTTP_REQUEST priority 750 {
         set type [URI::query [HTTP::uri] type] ; if { ${type} eq "" } { set type "A" }
         set name [URI::query [HTTP::uri] name] ; if { ${name} ne "" } { call DOH_LOG "DoH (JSON GET) Request" "${type}:${name}" ${hsl} }
         call DOH_URL_BLOCK "null" "${type}:${name}" "JSON" ${hsl}
-    } elseif { ( [HTTP::method] equals "GET" and [HTTP::header exists "accept"] and [HTTP::header "accept"] equals "application/dns-message" ) } {
+    } elseif { ( ( [HTTP::method] equals "GET" and [HTTP::header exists "content-type"] and [HTTP::header "content-type"] equals "application/dns-message" ) \
+                or ( [HTTP::method] equals "GET" and [HTTP::header exists "accept"] and [HTTP::header "accept"] equals "application/dns-message" ) ) } {
         ## DNS WireFormat DoH GET request
         if { [set name [URI::query [HTTP::uri] dns]] >= 0 } {
             binary scan [b64decode ${name}] H* tmp
