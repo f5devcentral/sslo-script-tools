@@ -1,6 +1,6 @@
 ## Rule: SSL Orchestrator DNS-over-HTTPS detection, logging and blackholing
 ## Author: Kevin Stewart
-## Version: 3, 10/2022
+## Version: 4, 10/2022
 ## Function: Creates a mechanism to detect, log, and potentially blackhole DNS-over-HTTPS requests through an SSL Orchestrator outbound topology.
 ## Instructions: 
 ##  - Under Local Traffic -> iRules in the BIG-IP UI, import the required iRule.
@@ -33,7 +33,7 @@ when RULE_INIT {
     ##      /Common/block-doh-urls
     ##   }
     set static::BLACKHOLE_URLCAT {
-
+        
     }
 
     ## User-defined: if enabled, generate blachole DNS responses for these record types
@@ -43,7 +43,8 @@ when RULE_INIT {
     set static::BLACKHOLE_RTYPE_TXT     1
 
     ## Set DNS record types: (ex. A=1, AAAA=28) ref: https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml
-    array set static::dns_codes { 1 A 2 NS 5 CNAME 6 SOA 12 PTR 16 TXT 28 AAAA 33 SRV 257 CAA }
+    #array set static::dns_codes { 1 A 2 NS 5 CNAME 6 SOA 12 PTR 16 TXT 28 AAAA 33 SRV 257 CAA }
+    array set static::dns_codes { 1 A 2 NS 5 CNAME 6 SOA 12 PTR 13 HINFO 15 MX 16 TXT 17 RP 18 AFSDB 28 AAAA 29 LOC 33 SRV 35 NAPTR 37 CERT 39 DNAME 43 DS 46 RRSIG 47 NSEC 48 DNSKEY 49 DHCID 50 NSEC3 51 NSEC3PARAM 52 TLSA 65 HTTPS 99 SPF 257 CAA }
 }
 proc DOH_URL_BLOCK { id name ver hsl } {
     ## This procedure consumes the query type id (A,AAAA), query name, DoH version (WF or JSON) and HSL object
