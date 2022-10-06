@@ -1,6 +1,6 @@
 ## Rule: SSL Orchestrator DNS-over-HTTPS detection, logging and blackholing
 ## Author: Kevin Stewart
-## Version: 2, 10/2022
+## Version: 3, 10/2022
 ## Function: Creates a mechanism to detect, log, and potentially blackhole DNS-over-HTTPS requests through an SSL Orchestrator outbound topology.
 ## Instructions: 
 ##  - Under Local Traffic -> iRules in the BIG-IP UI, import the required iRule.
@@ -33,15 +33,15 @@ when RULE_INIT {
     ##      /Common/block-doh-urls
     ##   }
     set static::BLACKHOLE_URLCAT {
-        
+
     }
-    
+
     ## User-defined: if enabled, generate blachole DNS responses for these record types
     ## Disabled (value: 0) or enabled (value: 1)
     set static::BLACKHOLE_RTYPE_A       1
     set static::BLACKHOLE_RTYPE_AAAA    1
     set static::BLACKHOLE_RTYPE_TXT     1
-    
+
     ## Set DNS record types: (ex. A=1, AAAA=28) ref: https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml
     array set static::dns_codes { 1 A 2 NS 5 CNAME 6 SOA 12 PTR 16 TXT 28 AAAA 33 SRV 257 CAA }
 }
@@ -50,7 +50,7 @@ proc DOH_URL_BLOCK { id name ver hsl } {
     ## and generates a blackhole DNS response is the name matches a defined URL category. Works for A, AAAA, and TXT records.
     set type [lindex [split ${name} ":"] 0]
     set name [lindex [split ${name} ":"] 1]
-    
+
     if { ${static::URLDB_LICENSED}} {
         set match 0 ; if { [llength ${static::BLACKHOLE_URLCAT}] > 0 } { set res [CATEGORY::lookup "https://${name}/" request_default_and_custom] ; foreach url ${res} { if { [lsearch -exact ${static::BLACKHOLE_URLCAT} ${url}] >= 0 } { set match 1 } } }
     } else {
@@ -77,6 +77,21 @@ proc DOH_URL_BLOCK { id name ver hsl } {
                 set template [string map [list "BLACKHOLE_TEMPLATE" ${name}] ${template}]
                 call DOH_LOG "Sending DoH Blackhole for Request" "${type}:${name}" ${hsl}
                 HTTP::respond 200 content ${template} "Content-Type" "application/dns-json" "Access-Control-Allow-Origin" "*"
+            } elseif { ${ver} eq "DoT" } {
+                ## build DNS A record blackhole response
+                set retstring "${id}81800001000100000000"
+                foreach x [split ${name} "."] {
+                    append retstring [format %02x [string length ${x}]]
+                    foreach y [split ${x} ""] {
+                        append retstring [format %02x [scan ${y} %c]]
+                    }
+                }
+                ## c7c7c7c7c = 199.199.199.199
+                append retstring {0000010001c00c00010001000118c30004c7c7c7c7}
+                set lenhex [format %04x [string length ${retstring}]]
+                set retstring "${lenhex}${retstring}"
+                call DOH_LOG "Sending DoT Blackhole for Request" "${type}:${name}" ${hsl}
+                SSL::respond [binary format H* ${retstring}]
             }
         } elseif { ( ${type} eq "AAAA" ) and ( ${static::BLACKHOLE_RTYPE_AAAA} ) } {
             if { ${ver} eq "WF" } {
@@ -97,6 +112,21 @@ proc DOH_URL_BLOCK { id name ver hsl } {
                 set template [string map [list "BLACKHOLE_TEMPLATE" ${name}] ${template}]
                 call DOH_LOG "Sending DoH Blackhole for Request" "${type}:${name}" ${hsl}
                 HTTP::respond 200 content ${template} "Content-Type" "application/dns-json" "Access-Control-Allow-Origin" "*"
+            } elseif { ${ver} eq "DoT" } {
+                ## build DNS A record blackhole response
+                set retstring "${id}81800001000100000000"
+                foreach x [split ${name} "."] {
+                    append retstring [format %02x [string length ${x}]]
+                    foreach y [split ${x} ""] {
+                        append retstring [format %02x [scan ${y} %c]]
+                    }
+                }
+                ## 0:0:0:0:0:ffff:c7c7:c7c7
+                append retstring {00001c0001c00c001c00010001488100100000000000000000000ffffc7c7c7c7}
+                set lenhex [format %04x [string length ${retstring}]]
+                set retstring "${lenhex}${retstring}"
+                call DOH_LOG "Sending DoT Blackhole for Request" "${type}:${name}" ${hsl}
+                SSL::respond [binary format H* ${retstring}]
             }
         } elseif { ( ${type} eq "TXT" ) and ( ${static::BLACKHOLE_RTYPE_TXT} ) } {
             if { ${ver} eq "WF" } {
@@ -117,6 +147,21 @@ proc DOH_URL_BLOCK { id name ver hsl } {
                 set template [string map [list "BLACKHOLE_TEMPLATE" ${name}] ${template}]
                 call DOH_LOG "Sending DoH Blackhole for Request" "${type}:${name}" ${hsl}
                 HTTP::respond 200 content ${template} "Content-Type" "application/dns-json" "Access-Control-Allow-Origin" "*"
+            } elseif { ${ver} eq "DoT" } {
+                ## build DNS A record blackhole response
+                set retstring "${id}81800001000100000000"
+                foreach x [split ${name} "."] {
+                    append retstring [format %02x [string length ${x}]]
+                    foreach y [split ${x} ""] {
+                        append retstring [format %02x [scan ${y} %c]]
+                    }
+                }
+                ## generic "v=spf1 -all"
+                append retstring {0000100001c00c0010000100002a30000c0b763d73706631202d616c6c}
+                set lenhex [format %04x [string length ${retstring}]]
+                set retstring "${lenhex}${retstring}"
+                call DOH_LOG "Sending DoT Blackhole for Request" "${type}:${name}" ${hsl}
+                SSL::respond [binary format H* ${retstring}]
             }
         }
     }
@@ -165,14 +210,40 @@ proc DECODE_DNS_REQ { data } {
         return "${typestr}:${name}"
     }
 }
+proc SAFE_BASE64_DECODE { payload } {
+    if { [catch {b64decode "${payload}[expr {[string length ${payload}] % 4 == 0 ? "":[string repeat "=" [expr {4 - [string length ${payload}] % 4}]]}]"} decoded_value] == 0 and ${decoded_value} ne "" } {
+        return ${decoded_value}
+    } else {
+        return 0
+    }
+}
 when CLIENT_ACCEPTED {
     ## This event establishes HSL connection (as required) and sends reject if destination address is the blackhole IP.
     if { ${static::HSL} ne "none" } { set hsl [HSL::open -proto UDP -pool ${static::HSL}] } else { set hsl "none" } 
     if { [IP::local_addr] eq "199.199.199.199" } { reject }
     if { [IP::local_addr] eq "0:0:0:0:0:ffff:c7c7:c7c7" } { reject }
 }
+when CLIENTSSL_HANDSHAKE priority 50 {
+    ## This event triggers on decrypted DoT requests.
+    if { [TCP::local_port] eq "853" } {
+        SSL::collect
+    }
+}
+when CLIENTSSL_DATA priority 50 {
+    ## This event is triggered parse the decrypted DoT request.
+    if { [TCP::local_port] eq "853" } {
+        binary scan [SSL::payload] H* tmp
+        set id [string range ${tmp} 4 7]
+        set tmp [string range ${tmp} 28 end]
+        if { [set name [call DECODE_DNS_REQ ${tmp}]] ne "error" } {
+            call DOH_LOG "DoT Request" ${name} ${hsl}
+            call DOH_URL_BLOCK ${id} ${name} "DoT" ${hsl}
+        }
+        SSL::release
+    }
+}
 when HTTP_REQUEST priority 750 {
-    ## Thsi event parses the request looking for DoH type messages.
+    ## This event parses the request looking for DoH type messages.
     if { ( [HTTP::method] equals "GET" and [HTTP::header exists "accept"] and [HTTP::header "accept"] equals "application/dns-json" ) } {
         ## JSON DoH request
         set type [URI::query [HTTP::uri] type] ; if { ${type} eq "" } { set type "A" }
@@ -182,7 +253,8 @@ when HTTP_REQUEST priority 750 {
                 or ( [HTTP::method] equals "GET" and [HTTP::header exists "accept"] and [HTTP::header "accept"] equals "application/dns-message" ) ) } {
         ## DNS WireFormat DoH GET request
         if { [set name [URI::query [HTTP::uri] dns]] >= 0 } {
-            binary scan [b64decode ${name}] H* tmp
+            ## Use this construct to handle potentially missing padding characters
+            binary scan [call SAFE_BASE64_DECODE ${name}] H* tmp
             set id [string range ${tmp} 0 3]
             set tmp [string range ${tmp} 24 end]
             if { [set name [call DECODE_DNS_REQ ${tmp}]] ne "error" } {
