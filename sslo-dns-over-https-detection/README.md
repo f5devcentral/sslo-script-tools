@@ -1,6 +1,9 @@
 # SSL Orchestrator DNS-over-HTTPS Detection
 Set of iRule tools to add DoH detection to SSL Orchestrator
 
+Current version: 3 (Oct 2022)
+Includes support for DoT handling and minor bugfixes
+
 ## Version support
 These iRules work on all modern versions of BIG-IP (14.1+) and SSL Orchestrator (5.0+)
 
