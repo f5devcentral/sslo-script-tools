@@ -1,0 +1,138 @@
+## SaaS Tenant Isolation Rule
+## Author: Kevin Stewart
+## Version: 1.0
+## Date: 10/2022
+##
+## Description: inserts one or more tenant isolation HTTP headers for the set of SaaS resources defined below:
+##  - Office365
+##  - Webex
+##  - Google G-Suite
+##  - Dropbox
+##  - Youtube
+##  - Slack
+## 
+## Instructions:
+##  - RULE_INIT: Enter required header information for each needed SaaS resource
+##  - RULE_INIT: Enable/disable processing of each SaaS resource (ex. set static::use_office365 1)
+
+when RULE_INIT {
+    ## clean up array data on load
+    unset -nocomplain static::office365
+    unset -nocomplain static::webex
+    unset -nocomplain static::gsuite
+    unset -nocomplain static::dropbox
+    unset -nocomplain static::youtube
+    unset -nocomplain static::slack
+
+    ## set tenant isolation headers: Office365
+    array set static::office365 {
+        "Restrict-Access-To-Tenants" "enter-value-here"
+        "Restrict-Access-Context" "enter-value-here"
+    }
+    
+    ## set tenant isolation headers: Webex
+    array set static::webex {
+        "CiscoSpark-Allowed-Domains" "enter-value-here"
+    }
+    
+    ## set tenant isolation headers: Gsuite
+    array set static::gsuite {
+        "X-GoogApps-Allowed-Domains" "enter-value-here"
+    }
+    
+    ## set tenant isolation headers: Dropbox
+    array set static::dropbox {
+        "X-Dropbox-allowed-Team-Ids" "enter-value-here"
+    }
+    
+    ## set tenant isolation headers: Youtube (options: Strict / Moderate)
+    array set static::youtube {
+        "YouTube-Restrict" "Strict"
+    }
+    
+    ## set tenant isolation headers: Slack
+    array set static::slack {
+        "X-Slack-Allowed-Workspaces-Requester" "enter-value-here"
+        "X-Slack-Allowed-Workspaces" "enter-value-here"
+    }
+    
+    ## set tenant isolation triggers (0=off, 1=on)
+    set static::use_office365 1
+    set static::use_webex 0
+    set static::use_gsuite 0
+    set static::use_dropbox 0
+    set static::use_youtube 0
+    set static::use_slack 0
+}
+
+when HTTP_REQUEST {
+    if { $static::use_office365 } {
+        switch [string tolower [HTTP::host]] {
+            "login.microsoftonline.com" -
+            "login.microsoft.com" -
+            "login.windows.net" {
+                foreach {x y} [array get static::office365] {
+                    HTTP::header replace $x $y
+                }
+            }
+        }
+    }
+    if { $static::use_webex } {
+        switch -glob [string tolower [HTTP::host]] {
+            "identity.webex.com" -
+            "identity-eu.webex.com" -
+            "idbroker.webex.com" -
+            "idbroker-secondary.webex.com" -
+            "idbroker-b-us.webex.com" -
+            "idbroker-au.webex.com" -
+            "atlas-a.wbx2.com"  {
+                foreach {x y} [array get static::webex] {
+                    HTTP::header replace $x $y
+                }
+            }
+        }
+    }
+    if { $static::use_gsuite } {
+        switch -glob [string tolower [HTTP::host]] {
+            "*.google.com" -
+            "*.googleusercontent.com" -
+            "*.gstatic.com" {
+                foreach {x y} [array get static::gsuite] {
+                    HTTP::header replace $x $y
+                }
+            }
+        }
+    }
+    if { $static::use_dropbox } {
+        switch -glob [string tolower [HTTP::host]] {
+            "dropbox.com" -
+            "*.dropbox.com" {
+                foreach {x y} [array get static::dropbox] {
+                    HTTP::header replace $x $y
+                }
+            }
+        }
+    }
+    if { $static::use_youtube } {
+        switch -glob [string tolower [HTTP::host]] {
+            "www.youtube.com" -
+            "m.youtube.com" -
+            "youtubei.googleapis.com" -
+            "youtube.googleapis.com" -
+            "www.youtube-nocookie.com" {
+                foreach {x y} [array get static::youtube] {
+                    HTTP::header replace $x $y
+                }
+            }
+        }
+    }
+    if { $static::use_slack } {
+        switch -glob [string tolower [HTTP::host]] {
+            "*.slack.com" {
+                foreach {x y} [array get static::slack] {
+                    HTTP::header replace $x $y
+                }
+            }
+        }
+    }
+}
