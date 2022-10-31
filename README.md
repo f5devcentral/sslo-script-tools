@@ -11,3 +11,6 @@ This repository contains a set of script tools useful in SSL Orchestrator deploy
 - **Misc Tools**: Miscellaneous script tools.
 
 - **SSLOFIX**: BIG-IP SSL Orchestrator control plane diagnostic, synchronization, and repair tool.
+
+- **SaaS Tenant Isolation**: A simple iRule to inject SaaS tenant isolation headers for Office365, Webex, Google G-Suite, Dropbox, Youtube, and Slack.
+
