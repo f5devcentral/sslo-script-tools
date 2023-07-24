@@ -25,7 +25,7 @@ do
     fi
 done
 
-## Test for existing of custom URL category
+## Test for existing custom URL category
 exists=true && [[ "$(tmsh list /sys url-db url-category ${AI_CHAT_CATEGORY} 2>&1)" =~ "was not found" ]] && config=false
 if ($config)
 then
