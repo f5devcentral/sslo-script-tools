@@ -20,7 +20,18 @@ To deploy:
 
 <br />
 <br />
-To log category matches, set the Topology logging to Summary.
+
+To log category matches, edit the SSL Orchestrator Topology, and under Log Settings, set **SSL Orchestrator Generic** to "Information". This will enable a Traffic Summary log entry for each flow. By default this goes to local Syslog, but can be pushed to a remote collector by adjusting the Log Publisher. The following example Traffic Summary log entry lists both the policy rule match (GenerativeAI_Detect) and the URL category (/Common/SSLO_GENERATIVE_AI_CHAT):
+
+<br />
+
+```
+# tail -f /var/log/apm
+
+Jul 24 07:24:54 sslo1.f5labs.com info tmm3[10913]: 01c40000:6: /Common/sslo_demo.app/sslo_demo_accessProfile:Common:55e3d724: /Common/sslo_demo.app/sslo_demo-in-t-4 Traffic summary - tcp 10.1.10.50:45896 -> 13.107.213.70:443 clientSSL: TLSv1.2 ECDHE-RSA-AES128-GCM-SHA256 serverSSL: TLSv1.2 ECDHE-RSA-AES128-GCM-SHA256 L7 https (openai.com) decryption-status: decrypted duration: 138 msec service-path: ssloSC_all_services client-bytes-in: 1565 client-bytes-out: 99621 server-bytes-in: 103236 server-bytes-out: 2452 client-tls-handshake: completed server-tls-handshake: completed reset-cause: 'NA' policy-rule: 'GenerativeAI_Detect' url-category: /Common/SSLO_GENERATIVE_AI_CHAT ingress: /Common/client-vlan egress: /Common/outbound-vlan
+```
+
+<br />
 
 -----------------
 **Note**: Officially, ChatGPT through SSL Orchestrator requires HTTP/2. The **Proxy ALPN** option was added in 9.0: https://clouddocs.f5.com/sslo-deployment-guide/sslo-09/chapter1/page1.02.html. 
