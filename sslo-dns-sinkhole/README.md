@@ -21,7 +21,7 @@ To create the **sinkhole internal** virtual server configuration:
 * **Optional easy-install step**: The following Bash script builds all of the necessary objects for the internal virtual server configuration. You can either use this or follow the steps below to create these manually.
 
   ```
-  curl -s https://raw.githubusercontent.com/kevingstewart/sslo-dns-sinkhole/main/create-sinkhole-internal-config.sh | bash
+  curl -s https://raw.githubusercontent.com/f5devcentral/sslo-script-tools/main/sslo-dns-sinkhole/create-sinkhole-internal-config.sh | bash
   ```
 
 * **Step 1: Create the sinkhole certificate and key** The sinkhole certificate is specifically crafted to contain an empty Subject field. SSL Orchestrator is able to dynamically modify the subject-alternative-name field in the forged certificate, which is the only value of the two required by modern browsers.
