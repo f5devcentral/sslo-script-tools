@@ -16,6 +16,8 @@ DNS sinkholing to a blocking page effectively relies on two separate technologie
 
 ### Configuration: Sinkhole Internal
 
+*Note: Minimum BIG-IP requirement for this solution is version 16.x.*
+
 To create the **sinkhole internal** virtual server configuration:
 
 * **Optional easy-install step**: The following Bash script builds all of the necessary objects for the internal virtual server configuration. You can either use this or follow the steps below to create these manually.
