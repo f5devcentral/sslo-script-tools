@@ -1,6 +1,7 @@
 ## SSLO SNI Switching Rule (static version)
 ## Author: Kevin Stewart
-## Date: July 2020
+## Date: May 2024
+## Version: 1.1.0 (Updates for larger payloads in TLS1.3 handshakes)
 ## Purpose: Useful in SSLO versions 8.x and below to switch the client SSL profile based on ClientHello SNI
 ##      in inbound SSLO topologies. This would be practical for L3 inbound gateway mode or L2 inbound topologies.
 ## Instructions: 
@@ -30,5 +31,4 @@ when CLIENT_DATA priority 250 {
             set cmd3 "SSL::profile /Common/test3-clientssl" ; eval $cmd3
         }
     }
-    TCP::release
 }
