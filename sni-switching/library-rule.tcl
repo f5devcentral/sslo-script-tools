@@ -1,3 +1,10 @@
+## SNI Fetching Rule
+## Author: Kevin Stewart
+## Date: May 2024
+## Version: 1.1.0
+## Updates: 
+##      - Addresses larger payloads of TLS1.3 handshakes
+
 proc getSNI { payload } {
     set detect_handshake 1
     set tls_action 0
