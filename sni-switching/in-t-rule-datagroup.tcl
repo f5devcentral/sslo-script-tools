@@ -1,7 +1,6 @@
 ## SSLO SNI Switching Rule (data group version)
 ## Author: Kevin Stewart
-## Date: May 2024
-## Version: 1.1.0 (Updates for larger payloads in TLS1.3 handshakes)
+## Date: July 2020
 ## Purpose: Useful in SSLO versions 8.x and below to switch the client SSL profile based on ClientHello SNI
 ##      in inbound SSLO topologies. This would be practical for L3 inbound gateway mode or L2 inbound topologies.
 ## Instructions: 
@@ -14,16 +13,35 @@
 ##      - Edit the corresponding Interception Rule and add the SNI switching rule. Deploy and test.
 
 when CLIENT_ACCEPTED priority 250 {
+	SSL::disable
     TCP::collect
 }
 when CLIENT_DATA priority 250 {
+	binary scan [TCP::payload] cSS tls_xacttype tls_version tls_recordlen
+	set tls_length [expr $tls_recordlen+5]
+	if { ([info exists tls_length]) } {
+		if { [TCP::payload length] < $tls_length } {
+			TCP::collect
+			return
+		}
+    }
     ## call the external procedure
     set sni [call library-rule::getSNI [TCP::payload]]
-    
-    ## lookup SSL profile in data group
-    set sslprofile [class lookup ${sni} sni-switching-dg]
+    ##log local0. "select sni is $sni"
 
-    if { ${sslprofile} ne "" } {
-        set cmd "SSL::profile /Common/${sslprofile}" ; eval $cmd
+    if { ${sni} eq "null" } {
+            set cmd "SSL::disable" ; eval $cmd
+			set cmd "SSL::disable serverside" ; eval $cmd
+    } else {
+       ## lookup SSL profile in data group
+       set sslprofile [class match -value ${sni} ends_with sni-switching-dg]
+       ##log local0. "select profile is $sslprofile"
+       if { ${sslprofile} ne "" } {
+		  SSL::enable
+          set cmd "SSL::profile /Common/${sslprofile}" ; eval $cmd
+          #log local0. "SSL profile changed to $sslprofile"
+       }
+
     }
+    TCP::release
 }
