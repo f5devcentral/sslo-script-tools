@@ -1,10 +1,10 @@
 ## SSL Orchestrator Use Case: Internal Layered Architecture - Client-Facing Switching iRule
-## Version: 2.2
-## Date: 2021-07-19
+## Version: 2.3
+## Date: 2024-10-18
 ## Author: Kevin Stewart, F5 Networks
 ## Configuration: see SSLOLIB iRule for build instructions
 
-## Set a default topology assuming no other matches (d not edit)
+## Set a default topology assuming no other matches (do not edit)
 when CLIENT_ACCEPTED {
     call SSLOLIB::target $static::default_topology
 }
@@ -30,8 +30,8 @@ when CLIENTSSL_CLIENTHELLO {
     ## Do not edit
     set cmd "catch { HTTP::disable }" ; eval ${cmd}
     
-    ## Set local sni variable (for logging)
-    set sni ""
+    ## Do not edit - create sni variable and set from TLS client hello (for logging)
+    set sni ""; call SSLOLIB::SNI ""
 
     ## Standard certificate Pinners bypass rule (specify your bypass topology)
     if { [call SSLOLIB::SNI CAT:/Common/sslo-urlCatPinners] } { call SSLOLIB::target "bypass" ${sni} "pinners" ; return}
