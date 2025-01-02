@@ -38,3 +38,6 @@ fi
 
 ## Populate category with URLs
 tmsh -a modify /sys url-db url-category ${AI_CHAT_CATEGORY} ${str_urls} 2>&1
+
+## Clean up temp files
+rm -f ai-category-chat
