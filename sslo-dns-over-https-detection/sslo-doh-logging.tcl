@@ -170,7 +170,8 @@ proc DOH_URL_BLOCK { id name ver hsl } {
 proc DOH_LOG { msg name hsl } {
     ## This procedure consumes the message string, DoH question name, and HSL object to generates log messages.
     if { ${static::LOCAL_LOG} } { log -noname local0. "[IP::client_addr]:[TCP::client_port]-[IP::local_addr]:[TCP::local_port] :: ${msg}: ${name}" }
-    if { ${static::HSL} ne "none" } { HSL::send ${hsl} "<190> [IP::client_addr]:[TCP::client_port]-[IP::local_addr]:[TCP::local_port] :: ${msg}: ${name}" }
+    #if { ${static::HSL} ne "none" } { HSL::send ${hsl} "<190> [IP::client_addr]:[TCP::client_port]-[IP::local_addr]:[TCP::local_port] :: ${msg}: ${name}" }
+    if { ${static::HSL} ne "none" } { HSL::send ${hsl} "<34>1 [clock format [clock seconds] -gmt 1 -format {%Y-%m-%dT%H:%M:%S.000Z}] $static::tcl_platform(machine) sslo - [TMM::cmp_count] - ${msg}: ${name}"}
 }
 proc DECODE_DNS_REQ { data } {
     ## This procedure consumes the HEX-encoded DoH question and decodes to return the question name and type (A,AAAA,TXT, etc.).
