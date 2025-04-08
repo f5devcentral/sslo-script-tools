@@ -35,3 +35,12 @@ Jul 24 07:24:54 sslo1.f5labs.com info tmm3[10913]: 01c40000:6: /Common/sslo_demo
 
 -----------------
 **Note**: Officially, ChatGPT through SSL Orchestrator requires HTTP/2. The **Proxy ALPN** option was added in 9.0: https://clouddocs.f5.com/sslo-deployment-guide/sslo-09/chapter1/page1.02.html. 
+
+-----------------
+**Last Updated**: 08 April 2025
+
+Collected from various sources:
+- https://aitoolsdirectory.com/
+- https://github.com/filipecalegario/awesome-generative-ai
+- https://github.com/steven2358/awesome-generative-ai
+- https://doc.clickup.com/25598832/d/h/rd6vg-14247/0b79ca1dc0f7429/rd6vg-12207
