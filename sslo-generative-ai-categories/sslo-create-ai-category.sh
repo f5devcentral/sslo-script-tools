@@ -4,7 +4,7 @@
 AI_CHAT_CATEGORY="SSLO_GENERATIVE_AI_CHAT"
 
 ## Set category URLs
-AI_CHAT_URL="https://raw.githubusercontent.com/f5devcentral/sslo-script-tools/main/sslo-generative-ai-categories/ai-category-chat"
+AI_CHAT_URL="https://raw.githubusercontent.com/f5devcentral/sslo-script-tools/main/sslo-generative-ai-categories/ai-tools-urls"
 
 ## Fetch remote URL category
 curl -sO ${AI_CHAT_URL}
