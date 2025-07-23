@@ -1,6 +1,6 @@
 ## SSL Orchestrator Use Case: Internal Layered Architecture - SSLOLIB Traffic Matching Library
-## Version: 2.2
-## Date: 2021-07-19
+## Version: 2.3
+## Date: 2025-07-22
 ## Author: Kevin Stewart, F5 Networks
 ##
 ## Updates:
@@ -9,6 +9,7 @@
 ##      2.2: Updated SNI:CAT update to support custom categories only when URLDB not provisioned
 ##      2.2: Added HOST proc
 ##      2.2: Added target_ssf proc
+##      2.3: Added IPv6 support
 ##
 ## Configuration:
 ##  - Step 1: Import this SSLOLIB iRule (name "SSLOLIB")
@@ -23,6 +24,10 @@
 ##            - L3 outbound topology configuration, skip SSL config, re-use services, service chains
 ##            - No security policy rules - just a single ALL rule with TLS bypass action (and service chain)
 ##            - Attached to a separate "dummy" VLAN
+##          For IPv6 traffic:
+##            - Append a "6" to the end of the IPv6 topology names (ex. intercept6, bypass6)
+##            - If IPv4 and IPv6 listeners are required, create one topology for each with the same name, but append 6 to the IPv6 topology (ex. intercept & intercept6)
+##            - When specifying a topology target in the layering rule, always enter the base name without the 6 suffix (ex. intercept)
 ##      - Create any additional topologies as required, as separate functions based on discrete actions (allow/block, intercept/bypass, service chain)
 ##
 ##  - Step 3: Import the traffic switching iRule
@@ -30,7 +35,7 @@
 ##      - Define any URL category lists in RULE_INIT as required (see example). Use the following command to get a list of URL categories:
 ##           tmsh list sys url-db url-category |grep "sys url-db url-category " |awk -F" " '{print $4}'
 ##
-##  - Step 4: Create a client-facing topology switching VIP
+##  - Step 4a: Create a client-facing steering VIP
 ##      Type: Standard
 ##      Source: 0.0.0.0/0
 ##      Destination: 0.0.0.0/0:0
@@ -40,7 +45,10 @@
 ##      Default Persistence Profile: ssl
 ##      iRule: traffic switching iRule
 ##
-##  - Step 5: modify the traffic switching iRule with the required detection commands (below)
+##  - Step 4b: Create a separate client-facing IPv6 steering VIP, as required
+##      Same configuration as in step 4a, but with IPv6 source/destination
+##
+##  - Step 5: modify the traffic steering iRule with the required detection commands (below)
 ##
 ##
 ## Traffic selector commands (to be used in traffic switching iRule)
@@ -55,12 +63,18 @@
 ##  - Use the following commands to query the proc function for matches (all return true or false)
 ##    The following commands run in CLIENTSSL_CLIENTHELLO to act on SSL traffic
 ##
-##      Source IP Detection (static IP, IP subnet, data group match)
+##      Source IPv4 Detection (static IP, IP subnet, data group match)
 ##         SRCIP IP:<ip/subnet>
 ##         SRCIP DG:<data group name> (address-type data group)
 ##         if { [call SSLOLIB::SRCIP IP:10.1.0.0/16] } { call SSLOLIB::target "topology name" ${sni} "SRCIP" ; return }
 ##         if { [call SSLOLIB::SRCIP DG:my_sip_list] } { call SSLOLIB::target "topology name" ${sni} "SRCIP" ; return }
 ## 
+##      Source IPv6 Detection (static IP, IP subnet, data group match)
+##         SRCIP6 IP:<ip/subnet>
+##         SRCIP6 DG:<data group name> (address-type data group)
+##         if { [call SSLOLIB::SRCIP6 IP:2600:1408:c400:27::/64] } { call SSLOLIB::target "topology name" ${sni} "SRCIP6" ; return }
+##         if { [call SSLOLIB::SRCIP6 DG:my_sip_list] } { call SSLOLIB::target "topology name" ${sni} "SRCIP6" ; return }
+##
 ##      Source Port Detection (static port, port range, data group match)
 ##         SRCPORT PORT:<port/port-range>
 ##         SRCPORT DG:<data group name> (integer-type data group)
@@ -68,12 +82,18 @@
 ##         if { [call SSLOLIB::SRCPORT PORT:1000-60000] } { call SSLOLIB::target "topology name" ${sni} "SRCPORT" ; return }
 ##         if { [call SSLOLIB::SRCPORT DG:my-sport-list] } { call SSLOLIB::target "topology name" ${sni} "SRCPORT" ; return }
 ## 
-##      Destination IP Detection (static IP, IP subnet, data group match)
+##      Destination IPv4 Detection (static IP, IP subnet, data group match)
 ##         DSTIP IP:<ip/subnet>
 ##         DSTIP DG:<data group name> (address-type data group)
 ##         if { [call SSLOLIB::DSTIP IP:93.184.216.34] } { call SSLOLIB::target "topology name" ${sni} "DSTIP" ; return }
 ##         if { [call SSLOLIB::DSTIP DG:my-dip-list] } { call SSLOLIB::target "topology name" ${sni} "DSTIP" ; return }
 ## 
+##      Destination IPv6 Detection (static IP, IP subnet, data group match)
+##         DSTIP6 IP:<ip/subnet>
+##         DSTIP6 DG:<data group name> (address-type data group)
+##         if { [call SSLOLIB::DSTIP IP:2600:1408:c400:27::/64] } { call SSLOLIB::target "topology name" ${sni} "DSTIP6" ; return }
+##         if { [call SSLOLIB::DSTIP DG:my-dip-list] } { call SSLOLIB::target "topology name" ${sni} "DSTIP6" ; return }
+##
 ##      Destination Port Detection (static port, port range, data group match)
 ##         DSTPORT PORT:<port/port-range>
 ##         DSTPORT DG:<data group name> (integer-type data group)
@@ -128,13 +148,21 @@ proc errorlog {message} {
 proc target {topology {sni ""} {message ""}} {
     sharedvar SNI
     set SNI ${sni}
-    virtual "/Common/sslo_${topology}.app/sslo_${topology}-in-t-4"
+    if { [IP::version] == 4 } {
+        virtual "/Common/sslo_${topology}.app/sslo_${topology}-in-t-4"
+    } else {
+        virtual "/Common/sslo_${topology}6.app/sslo_${topology}6-in-t-6"
+    }
     if { ( $static::SSLODEBUG ) and ( ${sni} ne "" ) and ( ${message} ne "" ) } {
         log -noname local0. "SSLO Switch Log :: [IP::client_addr]:[TCP::client_port] -> [IP::local_addr]:[TCP::local_port] :: (${sni}) :: Match on ${message} :: Sending to ${topology}"
     }
 }
 proc target_ssf {topology {message ""}} {
-    virtual ${topology}
+    if { [IP::version] == 4 } {
+        virtual "/Common/sslo_${topology}.app/sslo_${topology}-in-t-4"
+    } else {
+        virtual "/Common/sslo_${topology}6.app/sslo_${topology}6-in-t-6"
+    }
     if { ( $static::SSLODEBUG ) and ( ${message} ne "" ) } {
         log -noname local0. "SSLO Switch Log :: [IP::client_addr]:[TCP::client_port] -> [IP::local_addr]:[TCP::local_port] :: Match on ${message} :: Sending to ${topology}"
     }
@@ -144,6 +172,14 @@ proc SRCIP { arg } {
     switch -- [lindex ${arglist} 0] {
         "IP" { if { [catch { set res [expr { [IP::addr [lindex ${arglist} 1] equals [IP::client_addr]] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
         "DG" { if { [catch { set res [expr { [class match -- [IP::client_addr] equals [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+    }
+}
+proc SRCIP6 { arg } {
+    if { ${arg} starts_with "IP:" } { set doit "IP" ; set argip [findstr ${arg} "IP:" 3] } elseif { ${arg} starts_with "DG:" } { set doit "DG" ; set argip [findstr ${arg} "DG:" 3] }
+    if { [IP::client_addr] contains "%vlan" } { set clientip [lindex [split [IP::client_addr] "%"] 0] } else { set clientip [IP::client_addr] }
+    switch -- ${doit} {
+        "IP" { if { [catch { set res [expr { [IP::addr ${argip} equals ${clientip}] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+        "DG" { if { [catch { set res [expr { [class match -- ${clientip} equals ${argip}] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
     }
 }
 proc SRCPORT { arg } {
@@ -158,6 +194,13 @@ proc DSTIP { arg } {
     switch -- [lindex ${arglist} 0] {
         "IP" { if { [catch { set res [expr { [IP::addr [lindex ${arglist} 1] equals [IP::local_addr]] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
         "DG" { if { [catch { set res [expr { [class match -- [IP::local_addr] equals [lindex ${arglist} 1]] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+    }
+}
+proc DSTIP6 { arg } {
+    if { ${arg} starts_with "IP:" } { set doit "IP" ; set argip [findstr ${arg} "IP:" 3] } elseif { ${arg} starts_with "DG:" } { set doit "DG" ; set argip [findstr ${arg} "DG:" 3] }
+    switch -- ${doit} {
+        "IP" { if { [catch { set res [expr { [IP::addr ${argip} equals [IP::local_addr]] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
+        "DG" { if { [catch { set res [expr { [class match -- [IP::local_addr] equals ${argip}] } ? 1 : 0] } err] } { call SSLOLIB::errorlog ${err} ; return 0 } else { return ${res} } }
     }
 }
 proc DSTPORT { arg } {
