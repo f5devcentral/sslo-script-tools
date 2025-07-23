@@ -1,23 +1,14 @@
 ## SSL Orchestrator Use Case: Internal Layered Architecture - Client-Facing Switching iRule
-## Version: 2.3
-## Date: 2024-10-18
+## Version: 2.4
+## Date: 2025-07-22
 ## Author: Kevin Stewart, F5 Networks
 ## Configuration: see SSLOLIB iRule for build instructions
 
-## Set a default topology assuming no other matches (do not edit)
-when CLIENT_ACCEPTED {
-    call SSLOLIB::target $static::default_topology
-}
-
-
-#####################################################
-## EDIT BELOW THIS BLOCK ############################
-#####################################################
 when RULE_INIT {
     ## User-defined: DEBUG logging flag (1=on, 0=off)
-    set static::SSLODEBUG 0
+    set static::SSLODEBUG 1
 
-    ## User-defined: Default topology if no rules match (the topology name as defined in SSLO)
+    ## User-defined: Default IPv4 topology if no rules match (the topology name as defined in SSLO)
     set static::default_topology "intercept"
 
     ## User-defined: URL category list (create as many lists as required)
@@ -26,10 +17,20 @@ when RULE_INIT {
         /Common/Health_and_Medicine
     }
 }
+
+#####################################################
+## EDIT BELOW THIS BLOCK ############################
+#####################################################
+
+## Set a default topology assuming no other matches (do not edit)
+when CLIENT_ACCEPTED {
+    call SSLOLIB::target $static::default_topology
+}
+
 when CLIENTSSL_CLIENTHELLO {
     ## Do not edit
     set cmd "catch { HTTP::disable }" ; eval ${cmd}
-    
+
     ## Do not edit - create sni variable and set from TLS client hello (for logging)
     set sni ""; call SSLOLIB::SNI ""
 
@@ -42,22 +43,28 @@ when CLIENTSSL_CLIENTHELLO {
     ################################
     #if { [call SSLOLIB::SRCIP IP:10.1.0.0/16] } { call SSLOLIB::target "bypass" ${sni} "SRCIP" ; return }
     #if { [call SSLOLIB::SRCIP DG:my-srcip-dg] } { call SSLOLIB::target "bypass" ${sni} "SRCIP" ; return }
+    
+    #if { [call SSLOLIB::SRCIP6 IP:fe80::5054:ff:fe7a:df53/64] } { call SSLOLIB::target "bypass" ${sni} "SRCIP6" ; return }
+    #if { [call SSLOLIB::SRCIP6 DG:my-srcip-dg] } { call SSLOLIB::target "bypass" ${sni} "SRCIP6" ; return }
 
     #if { [call SSLOLIB::SRCPORT PORT:5000] } { call SSLOLIB::target "bypass" ${sni} "SRCPORT" ; return }
     #if { [call SSLOLIB::SRCPORT PORT:1000-60000] } { call SSLOLIB::target "bypass" ${sni} "SRCPORT" ; return }
-    
+
     #if { [call SSLOLIB::DSTIP IP:93.184.216.34] } { call SSLOLIB::target "bypass" ${sni} "DSTIP" ; return }
     #if { [call SSLOLIB::DSTIP DG:my-destip-dg] } { call SSLOLIB::target "bypass" ${sni} "DSTIP" ; return }
     
+    #if { [call SSLOLIB::DSTIP6 IP:2600:1408:c400:27::/64] } { call SSLOLIB::target "bypass" ${sni} "DSTIP6" ; return }
+    #if { [call SSLOLIB::DSTIP6 DG:my-destip-dg] } { call SSLOLIB::target "bypass" ${sni} "DSTIP6" ; return }
+
     #if { [call SSLOLIB::DSTPORT PORT:443] } { call SSLOLIB::target "bypass" ${sni} "DSTPORT" ; return }
     #if { [call SSLOLIB::DSTPORT PORT:443-9999] } { call SSLOLIB::target "bypass" ${sni} "DSTPORT" ; return }
-    
+
     #if { [call SSLOLIB::SNI URL:www.example.com] } { call SSLOLIB::target "bypass" ${sni} "SNIURLGLOB" ; return }
     #if { [call SSLOLIB::SNI URLGLOB:.example.com] } { call SSLOLIB::target "bypass" ${sni} "SNIURLGLOB" ; return }
-    
+
     #if { [call SSLOLIB::SNI CAT:$static::URLCAT_Finance_Health] } { call SSLOLIB::target "bypass" ${sni} "SNICAT" ; return }
     #if { [call SSLOLIB::SNI CAT:/Common/Financial_Data_and_Services] } { call SSLOLIB::target "bypass" ${sni} "SNICAT" ; return }
-    
+
     #if { [call SSLOLIB::SNI DG:my-sni-dg] } { call SSLOLIB::target "bypass" ${sni} "SNIDGGLOB" ; return }
     #if { [call SSLOLIB::SNI DGGLOB:my-sniglob-dg] } { call SSLOLIB::target "bypass" ${sni} "SNIDGGLOB" ; return }
 
