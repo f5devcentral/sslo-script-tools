@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 ## F5 Custom URL Category Update Script
 ## Description: provides options to add URLs, delete URLs, and list the URLs in an existing custom URL category
-## Version: 3.0 (25 Mar 2026)
+## Version: 3.1 (26 Mar 2026)
 ## Author: Kevin Stewart
 ## Requires: bash, curl, jq
 ##
@@ -39,7 +39,14 @@ FILE=
 BIGIP=
 USERNAME=
 PASSWORD=
+DRYRUN=
 
+# colors
+CYAN='\033[36m'
+YELLOW='\033[33m'
+NC='\033[0m'
+
+set -euo pipefail
 
 ## valid external requirements (jq and curl)
 if ! command -v curl &> /dev/null; then
@@ -81,7 +88,7 @@ help() {
 
 errorhandler() {
     local msg="${1}"
-    echo -e "\nERROR: ${msg}\n"
+    echo -e "\n${CYAN}ERROR:${NC} ${YELLOW}${msg}${NC}\n"
     exit 1
 }
 
