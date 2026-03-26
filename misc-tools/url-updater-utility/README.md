@@ -26,6 +26,7 @@ URL category format requires a scheme (http://, https://), a domain name, and tr
 http://www.sitequest.com/
 https://www.siterequest.com/
 http://www.siterequest.com:8080/
+http://*.sitequest.com/
 https://www[0-9].siterequest.com/
 ```
 
