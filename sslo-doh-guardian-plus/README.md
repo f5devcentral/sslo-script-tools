@@ -6,7 +6,7 @@ Requires:
 * BIG-IP SSL Orchestrator 17.1.x (SSLO 11.1) and higher
 * Optional URLDB subscription -and/or- custom URL category (if categorization is required)
 
-#### To implement
+### To implement
 
 <ol>
   <li>Copy the iRule to the BIG-IP</li>
@@ -22,7 +22,7 @@ Requires:
 
 -----
 
-#### To customize functionality
+### To customize functionality
 
 The iRule comes with a large number of control surfaces for managing DoH, DoT, and ECH traffic:
 
@@ -48,7 +48,7 @@ The iRule comes with a large number of control surfaces for managing DoH, DoT, a
 
 -----
 
-#### Implementation details
+### Implementation details
 
 <br />
 
