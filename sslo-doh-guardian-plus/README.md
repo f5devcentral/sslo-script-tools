@@ -16,7 +16,7 @@ Requires:
       <li>At the bottom pf the page under **Resources**, add the new iRule into the *Selected* column. Click the **Save & Next** button and then re-deploy.</li>
     </ol>
   </li>
-  <li>Ensure that the L3 outbound topology has APLN support disabled (SSL Configuration). As of BIG-IP 21.1 the implementation does not (yet) support DoH over HTTP2.
+  <li>Ensure that the L3 outbound topology has APLN support disabled (SSL Configuration). As of BIG-IP 21.1 the implementation does not (yet) support DoH over HTTP2 or HTTP3/QUIC.
   </li>
 </ol>
 
