@@ -1,0 +1,808 @@
+## SSL Orchestrator Pattern - DoH Guardian Plus
+## Version: 2.0
+## Date: 2026 Apr 24
+## Author: Kevin Stewart, F5 Networks
+
+## To-Do:
+##  - ECH stripping function for DoT HTTPS records
+
+when RULE_INIT {
+    ## ===========================================
+    ## User-Defined Setting :: LOCAL LOGGING: Use this Boolean to send log traffic to local syslog facility (local0).
+    ##  This option is not recommended under heavy load. Consider using HSL logging to send to an external SIEM.
+    ## ===========================================
+    set static::DOH_LOG_LOCAL 1
+
+    ## ===========================================
+    ## User-Defined Setting :: HSL LOGGING: Use this string value to send log traffic to an external Syslog service via high-speed logging (HSL).
+    ##  The string must point to an existing HSL pool (ex. /Common/syslog-pool). A value of "none" disables HSL logging.
+    ## ===========================================
+    set static::DOH_LOG_HSL "none"
+
+    ## ===========================================
+    ## User-Defined Setting :: CATEGORY TYPE: Use this option to indicate the type of category to use.
+    ##  Options: "subscription", "custom_only", or "sub_and_custom"
+    ## ===========================================
+    set static::DOH_CATEGORY_TYPE "subscription"
+
+    ## ===========================================
+    ## User-Defined Setting :: BASIC BLOCKING: Use this Boolean to indicate basic blocking of all DoH requests.
+    ##  This option is mutually exclusive and takes precedence over all other blocking functions.
+    ## ===========================================
+    set static::DOH_BLOCKING_BASIC 0
+
+    ## ===========================================
+    ## User-Defined Array :: BLACKHOLE CATEGORY BLOCKING: Use this array to include any URL categories to trigger a DoH/DNS blackhole.
+    ##  A DNS blackhole sends a valid (but bad) address to the client in response. In this implementation, and IPv4 request
+    ##  gets 199.199.199.199, and an IPv6 requests gets 0:0:0:0:0:ffff:c7c7:c7c7.
+    ##  Note: if a category exists in both DOH_BLACKHOLE_BY_CATEGORY and DOH_SINKHOLE_BY_CATEGORY, the former takes precedence
+    ##
+    ##  Actions (select one of these for each anomaly condition):
+    ##      - dryrun        --> Dry Run action (just log)
+    ##      - blackhole     --> Blackhole the response
+    ## ===========================================
+    set static::DOH_BLACKHOLE_BY_CATEGORY_ACTION "dryrun"
+    set static::DOH_BLACKHOLE_BY_CATEGORY {
+        # /Common/Information_Technology1
+    }
+
+    ## ===========================================
+    ## User-Defined Array :: SINKHOLE CATEGORY BLOCKING: Use this array to include any URL categories to trigger a DoH/DNS sinkhole.
+    ##  A DNS sinkhole sends a valid address that points to a local blocking page.
+    ##  Note: if a category exists in both DOH_BLACKHOLE_BY_CATEGORY and DOH_SINKHOLE_BY_CATEGORY, the former takes precedence
+    ##
+    ##  Actions (select one of these for each anomaly condition):
+    ##      - dryrun        --> Dry Run action (just log)
+    ##      - sinkhole      --> Sinkhole the response
+    ## ===========================================
+    set static::DOH_SINKHOLE_BY_CATEGORY_ACTION "dryrun"
+    set static::DOH_SINKHOLE_BY_CATEGORY {
+        #/Common/Entertainment1
+    }
+
+    ## ===========================================
+    ## User-defined Setting: SINKHOLE IP ADDRESS: This IP address points to an HTTPS VIP on this BIG-IP that will serve up a
+    ##  blocking page.
+    ## ===========================================
+    set static::DOH_SINKHOLE_IP4 "10.1.10.160"
+    set static::DOH_SINKHOLE_IP6 "2002:c7c7:c7c8::"
+
+    ## ===========================================
+    ## User-defined Settings: ECH_BLOCK: Encrypted Client Hello (ECH) management: Used to detect and block ECH
+    ## Ref: https://datatracker.ietf.org/doc/rfc9849/
+    ##  ECH defines an extension to TLS1.3 to create two SNI values in the TLS client Hello (inner:encrypted, outer:plaintext). While this adds a layer
+    ##  of obfuscation security to TLS communications, it effectively blinds local security systems from knowing the actual SNI target, also breaking URL 
+    ##  categorization, SNI-based load balancing and visibility, etc. ECH works by utilizing DNS-over-HTTPS to convey symmetric key information via HTTPS 
+    ##  type DNS records. Once the client has this key material, it uses that to encrypt the inner SNI in the TLS Client Hello. The typical resolution to
+    ##  this challenge is to disable ECH (prevent the client from getting the ECH key). ECH can generally be disabled in one of two ways:
+    ##      a) Blocking all HTTPS record type queries --> light overhead in the parsing of the decrypted HTTP request, but potentially also blocks beneficial 
+    ##         values in those records that are used to speed up negotiations (ie. alpn, ipv4hint, ipv6hint)
+    ##      b) Removing the "ech" key from HTTPS type query responses --> slightly heavier overhead in the parsing of the DoH decrypted HTTP response, but
+    ##         retains beneficial HTTPS record values
+    ## ECH_BLOCK takes one of three values:
+    ##  - none          --> do not block ECH (default)
+    ##  - block         --> block HTTPS record queries
+    ##  - echstrip      --> strip the ECH value from HTTPS record responses
+    set static::ECH_BLOCK "none"
+    ## ===========================================
+
+    ## ===========================================
+    ## User-defined Setting: ANOMALY DETECTION: Use this Boolean to enable DNS/DoH anomaly detection, including:
+    ## Ref: Real time detection of malicious DoH traffic using statistical analysis: https://www.sciencedirect.com/science/article/pii/S1389128623003559
+    ##
+    ##  - Anomaly Conditions:
+    ##      - Unsually long domain name in query
+    ##      - Uncommon record types in query
+    ##  - Anomaly Actions (select one of these for each anomaly condition):
+    ##      - dryrun        --> Dry Run action (just log)
+    ##      - drop          --> Drop the request or response (depending on anomaly condition)
+    ##      - blackhole     --> Blackhole the response
+    ##      - sinkhole      --> Sinkhole the response
+    ## ===========================================
+    set static::DOH_ANOMALY_DETECTION_ENABLE 0
+
+    ## ===========================================
+    ## User-defined Setting: ANOMALY CONDITION: LONG DOMAIN: Enter an integer value here to indicate the maximum character length for a domain
+    ##  Default: > 52 characters
+    ##  Disable: 0
+    ## ===========================================
+    set static::DOH_ANOMALY_CONDITION_LONG_DOMAIN_ACTION "dryrun"
+    set static::DOH_ANOMALY_CONDITION_LONG_DOMAIN 52
+
+    ## ===========================================
+    ## User-defined Setting: ANOMALY CONDITION: UNCOMMON RECORD TYPES: Enter a list of flagged record types
+    ##  Default: {"NULL" "NAPTR"}
+    ##  Disable: {""}
+    ## ===========================================
+    set static::DOH_ANOMALY_CONDITION_UNCOMMON_TYPE_ACTION "dryrun"
+    set static::DOH_ANOMALY_CONDITION_UNCOMMON_TYPE {"NULL" "NAPTR"}
+
+
+
+    ##############################################
+    ## INTERNAL ##################################
+    ##############################################
+
+    ## DNS CODES
+    ## Ref: https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml
+    ## Ref: https://en.wikipedia.org/wiki/List_of_DNS_record_types
+    ## array set static::dns_codes { 1 A 2 NS 5 CNAME 6 SOA 10 NULL 12 PTR 13 HINFO 15 MX 16 TXT 17 RP 18 AFSDB 28 AAAA 29 LOC 33 SRV 35 NAPTR 37 CERT 39 DNAME 43 DS 46 RRSIG 47 NSEC 48 DNSKEY 49 DHCID 50 NSEC3 51 NSEC3PARAM 52 TLSA 65 HTTPS 99 SPF 257 CAA }
+    array set static::dns_codes {1 A 2 NS 3 MD 4 MF 5 CNAME 6 SOA 7 MB 8 MG 9 MR 10 NULL 11 WKS 12 PTR 13 HINFO 14 MINFO 15 MX 16 TXT 17 RP 18 AFSDB 19 X25 20 ISDN 21 RT 22 NSAP 23 NSAPPTR 24 SIG 25 KEY 26 PX 27 GPOS 28 AAAA 29 LOC 30 NXT 31 EID 32 NIMLOC 33 SRV 34 ATMA 35 NAPTR 36 KX 37 CERT 38 A6 39 DNAME 40 SINK 41 OPT 42 APL 43 DS 44 SSHFP 45 IPSECKEY 46 RRSIG 47 NSEC 48 DNSKEY 49 DHCID 50 NSEC3 51 NSEC3PARAM 52 TLSA 53 SMIMEA 55 HIP 56 NINFO 57 RKEY 58 TALINK 59 CDS 60 CDNSKEY 61 OPENPGPKEY 62 CSYNC 63 ZONEMD 64 SVCB 65 HTTPS 99 SPF 100 UINFO 101 UID 102 GID 103 UNSPEC 104 NID 105 L32 106 L64 107 LP 108 EUI48 109 EUI64 249 TKEY 250 TSIG 251 IXFR 252 AXFR 253 MAILB 254 MAILA 256 URI 257 CAA 259 DOA 32768 TA 32769 DLV}
+}
+
+############################################################
+######### PROGRAM LOGIC BELOW ##############################
+############################################################
+
+## UTILITY: DOH_LOG
+## This procedure consumes the message string, DoH question name, and HSL pool object to generates log messages.
+## Inputs:
+##  msg:    message string
+##  name:   name of the requested host (ex. www.f5labs.com)
+##  hsl:    hsl pool if configured, otherwise "none"
+proc DOH_LOG { msg name hsl } {
+    if { ${static::DOH_LOG_LOCAL} } { log -noname local0. "[IP::client_addr]:[TCP::client_port]-[IP::local_addr]:[TCP::local_port] :: ${msg}: ${name}" }
+    if { ${static::DOH_LOG_HSL} ne "none" } { HSL::send ${hsl} "<34>1 [clock format [clock seconds] -gmt 1 -format {%Y-%m-%dT%H:%M:%S.000Z}] $static::tcl_platform(machine) sslo - [TMM::cmp_count] - ${msg}: ${name}"}
+}
+
+## UTILITY: IP_TO_HEX
+## Converts the incoming IP to hex
+## Inputs:
+##  ver:    IP version (ipv4 or ipv6)
+##  ip:     IP address
+proc IP_TO_HEX { ver ip } {
+    switch -- ${ver} {
+        "ipv4" {
+            set iplist [split ${ip} "."]
+            set ipint [expr { \
+                [expr { [lindex ${iplist} 3] }] + \
+                [expr { [lindex ${iplist} 2] * 256 }] + \
+                [expr { [lindex ${iplist} 1] * 65536 }] + \
+                [expr { [lindex ${iplist} 0] * 16777216 }] \
+            }]
+            return [format %08x ${ipint}]
+        }
+        "ipv6" {
+            return [format %032s [string map {":" ""} $ip]]
+        }
+    }
+}
+
+## UTILITY: SAFE_BASE64_DECODE
+## Safely decodes a base64-encoded payload and catches any errors
+## Inputs:
+##  payload:    base64-encoded payload
+proc SAFE_BASE64_DECODE { payload } {
+    if { [catch {b64decode "${payload}[expr {[string length ${payload}] % 4 == 0 ? "":[string repeat "=" [expr {4 - [string length ${payload}] % 4}]]}]"} decoded_value] == 0 and ${decoded_value} ne "" } {
+        return ${decoded_value}
+    } else {
+        return 0
+    }
+}
+
+## STRIP_HTTPS_ECH
+## This procedure consumes the DoH/DNS HTTP payload response, when the client sends a DoH request for HTTPS record (for ECH), and strips the ECH record from that response
+## Inputs:
+##  data: raw DoH HTTP (DNS) response
+proc STRIP_HTTPS_ECH { reqtype data } {
+# --- locate the answer RDATA --------------------------------
+    # --- skip DNS header (12 to 14 bytes, depending on query type) + question QNAME ----------------
+
+    # Set pos 12
+    if { $reqtype eq "dot" } { set pos 14 } else { set pos 12 }
+
+    while { $pos < [string length $data] } {
+        set label_len [scan [string index $data $pos] %c]
+        incr pos
+        if { $label_len == 0 } { break }
+        if { ($label_len & 0xC0) == 0xC0 } { incr pos ; break }
+        incr pos $label_len
+    }
+    incr pos 4  ;# QTYPE(2) + QCLASS(2)
+
+    set b_raw [string index $data $pos]
+    if { $b_raw eq "" } { return $data }
+    scan $b_raw %c b
+    if { ($b & 0xC0) == 0xC0 } {
+        incr pos 2
+    } else {
+        while { $pos < [string length $data] } {
+            set label_len_raw [string index $data $pos]
+            if { $label_len_raw eq "" } { break }
+            scan $label_len_raw %c label_len
+            incr pos
+            if { $label_len == 0 } { break }
+            if { ($label_len & 0xC0) == 0xC0 } { incr pos ; break }
+            incr pos $label_len
+        }
+    }
+
+    # --- TYPE(2) CLASS(2) TTL(4) rdlen(2) ---------------------------
+    set rdlen_offset [expr { $pos + 8 }]
+    binary scan [string range $data $rdlen_offset [expr { $rdlen_offset + 1 }]] S rdlen
+    set rdlen [expr { $rdlen & 0xffff }]
+    set rdata_offset [expr { $rdlen_offset + 2 }]
+
+    # --- HTTPS RDATA: skip SvcPriority(2) + TargetName --------------
+    set j [expr { $rdata_offset + 2 }]
+    while { $j < [string length $data] } {
+        set label_len [scan [string index $data $j] %c]
+        incr j
+        if { $label_len == 0 } { break }
+        if { ($label_len & 0xC0) == 0xC0 } { incr j ; break }
+        incr j $label_len
+    }
+
+    # --- Scan SvcParams for key=5 (ECH) -----------------------------
+    set rdata_end [expr { $rdata_offset + $rdlen }]
+    set ech_start -1
+    set ech_end   -1
+    while { $j < $rdata_end } {
+        binary scan [string range $data $j [expr { $j + 1 }]] S param_key
+        set param_key [expr { $param_key & 0xffff }]
+        binary scan [string range $data [expr { $j + 2 }] [expr { $j + 3 }]] S param_len
+        set param_len [expr { $param_len & 0xffff }]
+        if { $param_key == 5 } {
+            set ech_start $j
+            set ech_end   [expr { $j + 4 + $param_len }]
+            break
+        }
+        incr j [expr { 4 + $param_len }]
+    }
+
+    if { $ech_start < 0 } {
+        return $data
+    }
+
+    # --- Splice out ECH param, patch rdlen --------------------------
+    set new_rdlen [expr { $rdlen - ($ech_end - $ech_start) }]
+    set before [string range $data 0 [expr { $ech_start - 1 }]]
+    set after  [string range $data $ech_end end]
+    set result [binary format a*a* $before $after]
+    set result [string replace $result $rdlen_offset [expr { $rdlen_offset + 1 }] [binary format S $new_rdlen]]
+    
+    ## Encoding fix and return
+    binary scan $result H* tmp
+    return $result
+}
+
+## DECODE_DNS_REQ
+## This procedure consumes the HEX-encoded DoH question and decodes to return the question name and type (A,AAAA,TXT, etc.).
+## Inputs:
+##  data:   HEX-encoded DNS request data
+proc DECODE_DNS_REQ { data } {
+    if { [catch {
+        set name "" ; set type "" ; set pos 0 ; set count 0 ; set typectr 0 ; set num 0
+
+        ## Process question
+        foreach {i j} [split ${data} ""] {
+            scan ${i}${j} %x num
+
+            if { ${typectr} > 0 } {
+                ## Collecting the 2-byte QTYPE
+                append type "${i}${j}"
+                if { ${typectr} == 2 } { break }
+                incr typectr
+
+            } elseif { ${num} == 0 } {
+                ## Root label — QNAME is complete, next 2 bytes are QTYPE
+                set typectr 1
+
+            } elseif { ${count} == 0 } {
+                ## Length byte for a new label (and num > 0)
+                set count ${num}
+                set pos   0
+                append name "."
+
+            } else {
+                ## Character byte within current label
+                append name [binary format H* ${i}${j}]
+                incr pos
+                if { ${pos} == ${count} } {
+                    ## Label complete — reset for next length byte
+                    set count 0
+                    set pos   0
+                }
+            }
+        }
+
+        set name [string range ${name} 1 end]
+
+        if { [catch {
+            scan ${type} %xx type
+            set typestr $static::dns_codes(${type})
+        }] } {
+            set typestr "UNK"
+        }
+
+    }] } {
+        return "error"
+    } else {
+        return "[string toupper ${typestr}]:${name}"
+    }
+}
+
+## DOH_BLOCK
+## Performs blackhole or sinkhole block on request
+## Inputs:
+##  block:  type of block --> "blackhole" or "sinkhole"
+##  type:   request type --> A, AAAA, TXT, or HTTPS for blackhole, A or AAAA for sinkhole
+##  ver:    DoH request version --> WF-GET, WF-POST, or JSON
+##  id:     id of the request
+##  name:   name of the requested host (ex. www.f5labs.com)
+##  hsl:    hsl pool if configured, otherwise "none"
+proc DOH_BLOCK { block type ver id name hsl } {
+    # log local0. "block: $block"
+    # log local0. "type: $type"
+    # log local0. "ver: $ver"
+    # log local0. "id: $id"
+    # log local0. "name: $name"
+    switch -- ${block} {
+        "blackhole" {
+            ## Normalize type
+            if { [lsearch [list "A" "AAAA" "TXT" "HTTPS"] $type] < 0 } { set type "A" }
+
+            switch -- ${type} {
+                "A" {
+                    ## Build DNS A record blackhole response
+                    ## Insert --> {id},flags(8180),questions(0001),answer-rrs(0001),authority-rrs(0000),addl-rrs(0000)
+                    set retstring "${id}81800001000100000000"
+
+                    ## Split name into hex values
+                    foreach x [split ${name} "."] {
+                        append retstring [format %02x [string length ${x}]]
+                        foreach y [split ${x} ""] {
+                            append retstring [format %02x [scan ${y} %c]]
+                        }
+                    }
+
+                    ## Insert --> 00,A(0001),IN(0001),name(c00c),type(0001),class(0001),ttl(00000012),length(0004)
+                    append retstring {0000010001c00c00010001000000120004}
+                    
+                    ## Insert --> 199.199.199.199
+                    append retstring {c7c7c7c7}
+
+                    ## Respond based on request type
+                    if { ${ver} starts_with "WF-" } {
+                        call DOH_LOG "Sending DoH Blackhole for Request" "${type}:${name}" ${hsl}
+                        HTTP::respond 200 content [binary format H* ${retstring}] "Content-Type" "application/dns-message" "Access-Control-Allow-Origin" "*"
+
+                    } elseif { ${ver} eq "DoT" } {
+                        call DOH_LOG "Sending DoT Blackhole for Request" "${type}:${name}" ${hsl}
+                        set lenhex [format %04x [string length ${retstring}]]
+                        set retstring "${lenhex}${retstring}"
+                        SSL::respond [binary format H* ${retstring}]
+
+                    } elseif { ${ver} eq "JSON" } {
+                        set template "\{\"Status\": 0,\"TC\": false,\"RD\": true,\"RA\": true,\"AD\": true,\"CD\": false,\"Question\": \[\{\"name\": \"BLACKHOLE_TEMPLATE\",\"type\": 1 \}\],\"Answer\": \[\{\"name\": \"BLACKHOLE_TEMPLATE\",\"type\":1,\"TTL\": 84078,\"data\": \"199.199.199.199\" \}\]\}"
+                        set template [string map [list "BLACKHOLE_TEMPLATE" ${name}] ${template}]
+                        call DOH_LOG "Sending DoH Blackhole for Request" "${type}:${name}" ${hsl}
+                        HTTP::respond 200 content ${template} "Content-Type" "application/dns-json" "Access-Control-Allow-Origin" "*"
+                    }
+                }
+                "AAAA" {
+                    ## Build DNS AAAA record blackhole response
+                    ## Insert --> {id},flags(8180),questions(0001),answer-rrs(0001),authority-rrs(0000),addl-rrs(0000)
+                    set retstring "${id}81800001000100000000"
+
+                    ## Split name into hex values
+                    foreach x [split ${name} "."] {
+                        append retstring [format %02x [string length ${x}]]
+                        foreach y [split ${x} ""] {
+                            append retstring [format %02x [scan ${y} %c]]
+                        }
+                    }
+
+                    ## Insert --> 00,AAAA(001c),IN(0001),name(c00c),type(001c),class(0001),ttl(00000012),length(0010)
+                    append retstring {00001c0001c00c001c0001000000120010}
+
+                    ## Insert --> 2002:c7c7:c7c7:: (199.199.199.199)
+                    append retstring {2002c7c7c7c700000000000000000000}
+
+                    ## Respond based on request type
+                    if { ${ver} starts_with "WF-" } {
+                        call DOH_LOG "Sending DoH Blackhole for Request" "${type}:${name}" ${hsl}
+                        HTTP::respond 200 content [binary format H* ${retstring}] "Content-Type" "application/dns-message" "Access-Control-Allow-Origin" "*"
+
+                    } elseif { ${ver} eq "DoT" } {
+                        call DOH_LOG "Sending DoT Blackhole for Request" "${type}:${name}" ${hsl}
+                        set lenhex [format %04x [string length ${retstring}]]
+                        set retstring "${lenhex}${retstring}"
+                        SSL::respond [binary format H* ${retstring}]
+
+                    } elseif { ${ver} eq "JSON" } {
+                        set template "\{\"Status\": 0,\"TC\": false,\"RD\": true,\"RA\": true,\"AD\": true,\"CD\": false,\"Question\": \[\{\"name\": \"BLACKHOLE_TEMPLATE\",\"type\": 28 \}\],\"Answer\": \[\{\"name\": \"BLACKHOLE_TEMPLATE\",\"type\":28,\"TTL\": 84078,\"data\": \"2002:c7c7:c7c7::\" \}\]\}"
+                        set template [string map [list "BLACKHOLE_TEMPLATE" ${name}] ${template}]
+                        call DOH_LOG "Sending DoH Blackhole for Request" "${type}:${name}" ${hsl}
+                        HTTP::respond 200 content ${template} "Content-Type" "application/dns-json" "Access-Control-Allow-Origin" "*"
+                    }
+                }
+                "TXT" {
+                    ## Build DNS TXT record blackhole response
+                    ## Insert --> {id},flags(8180),questions(0001),answer-rrs(0001),authority-rrs(0000),addl-rrs(0000)
+                    set retstring "${id}81800001000100000000"
+
+                    ## Split name into hex values
+                    foreach x [split ${name} "."] {
+                        append retstring [format %02x [string length ${x}]]
+                        foreach y [split ${x} ""] {
+                            append retstring [format %02x [scan ${y} %c]]
+                        }
+                    }
+
+                    ## Insert --> 00,TXT(0010),IN(0001),name(c00c),type(0010),class(0001),ttl(00000012),length(000c)
+                    append retstring {0000100001c00c0010000100000012000c}
+
+                    ## Insert --> generic "v=spf1 -all"
+                    append retstring {0b763d73706631202d616c6c}
+
+                    ## Respond based on request type
+                    if { ${ver} starts_with "WF-" } {
+                        call DOH_LOG "Sending DoH Blackhole for Request" "${type}:${name}" ${hsl}
+                        HTTP::respond 200 content [binary format H* ${retstring}] "Content-Type" "application/dns-message" "Access-Control-Allow-Origin" "*"
+                        
+                    } elseif { ${ver} eq "DoT" } {
+                        call DOH_LOG "Sending DoT Blackhole for Request" "${type}:${name}" ${hsl}
+                        set lenhex [format %04x [string length ${retstring}]]
+                        set retstring "${lenhex}${retstring}"
+                        SSL::respond [binary format H* ${retstring}]
+
+                    } elseif { ${ver} eq "JSON" } {
+                        set template "\{\"Status\": 0,\"TC\": false,\"RD\": true,\"RA\": true,\"AD\": true,\"CD\": false,\"Question\": \[\{\"name\": \"BLACKHOLE_TEMPLATE\",\"type\": 16 \}\],\"Answer\": \[\{\"name\": \"BLACKHOLE_TEMPLATE\",\"type\":16,\"TTL\": 84078,\"data\": \"v=spf1 -all\" \}\]\}"
+                        set template [string map [list "BLACKHOLE_TEMPLATE" ${name}] ${template}]
+                        call DOH_LOG "Sending DoH Blackhole for Request" "${type}:${name}" ${hsl}
+                        HTTP::respond 200 content ${template} "Content-Type" "application/dns-json" "Access-Control-Allow-Origin" "*"
+                    }
+                }
+                "HTTPS" {
+                    ## Build DNS HTTPS record blackhole response
+                    ## Insert --> {id},flags(8180),questions(0001),answer-rrs(0001),authority-rrs(0000),addl-rrs(0000)
+                    set retstring "${id}81800001000100000000"
+
+                    ## Split name into hex values
+                    foreach x [split ${name} "."] {
+                        append retstring [format %02x [string length ${x}]]
+                        foreach y [split ${x} ""] {
+                            append retstring [format %02x [scan ${y} %c]]
+                        }
+                    }
+                    
+                    ## Insert --> 00,HTTPS(0041),IN(0001),name(c00c),type(0041),class(0001),ttl(00000012),length(0003)
+                    append retstring {0000410001c00c00410001000000120003}
+
+                    ## Insert --> empty HTTPS record
+                    append retstring {000100}
+
+                    ## Respond based on request type
+                    if { ${ver} starts_with "WF-" } {
+                        call DOH_LOG "Sending DoH Blackhole for Request" "${type}:${name}" ${hsl}
+                        HTTP::respond 200 content [binary format H* ${retstring}] "Content-Type" "application/dns-message" "Access-Control-Allow-Origin" "*"
+                    
+                    } elseif { ${ver} eq "DoT" } {
+                        call DOH_LOG "Sending DoT Blackhole for Request" "${type}:${name}" ${hsl}
+                        set lenhex [format %04x [string length ${retstring}]]
+                        set retstring "${lenhex}${retstring}"
+                        SSL::respond [binary format H* ${retstring}]
+                    
+                    } elseif { ${ver} eq "JSON" } {
+                        # set template "\{\"Status\": 0,\"TC\": false,\"RD\": true,\"RA\": true,\"AD\": true,\"CD\": false,\"Question\": \[\{\"name\": \"BLACKHOLE_TEMPLATE\",\"type\": 65 \}\],\"Answer\": \[\{\"name\": \"BLACKHOLE_TEMPLATE\",\"type\":65,\"TTL\": 84078,\"data\": \"v=spf1 -all\" \}\]\}"
+                        set template "\{\"Status\": 0,\"TC\": false,\"RD\": true,\"RA\": true,\"AD\": true,\"CD\": false,\"Question\": \[\{\"name\": \"BLACKHOLE_TEMPLATE\",\"type\": 65 \}\],\"Answer\": \[\{\"name\": \"BLACKHOLE_TEMPLATE\",\"type\":65,\"TTL\": 84078,\"data\": \"\" \}\]\}"
+                        set template [string map [list "BLACKHOLE_TEMPLATE" ${name}] ${template}]
+                        call DOH_LOG "Sending DoH Blackhole for Request" "${type}:${name}" ${hsl}
+                        HTTP::respond 200 content ${template} "Content-Type" "application/dns-json" "Access-Control-Allow-Origin" "*"
+                    }
+                }
+            }
+        }
+        "sinkhole" {
+            ## Normalize type
+            if { [lsearch [list "A" "AAAA"] $type] < 0 } { set type "A" }
+
+            switch -- ${type} {
+                "A" {
+                    ## Get sinkhole IP, or use default
+                    if { $static::DOH_SINKHOLE_IP4 ne "" } {
+                        set ipinjected $static::DOH_SINKHOLE_IP4
+                        set iphexinjected [call IP_TO_HEX "ipv4" $static::DOH_SINKHOLE_IP4]
+                    } else {
+                        set ipinjected "199.199.199.199"
+                        set iphexinjected [call IP_TO_HEX "ipv4" "199.199.199.199"]
+                    }
+
+                    if { ${ver} starts_with "WF-" } {
+                        ## Build DNS A record sinkhole response
+
+                        ## Insert --> {id},flags(8180),questions(0001),answer-rrs(0001),authority-rrs(0000),addl-rrs(0000)
+                        set retstring "${id}81800001000100000000"
+
+                        ## Split name into hex values
+                        foreach x [split ${name} "."] {
+                            append retstring [format %02x [string length ${x}]]
+                            foreach y [split ${x} ""] {
+                                append retstring [format %02x [scan ${y} %c]]
+                            }
+                        }
+
+                        ## Insert --> 00,A(0001),IN(0001),name(c00c),type(0001),class(0001),ttl(00000012),length(0010)
+                        append retstring {0000010001c00c00010001000000120004}
+
+                        ## Insert --> answer (ipv4)
+                        append retstring ${iphexinjected}
+
+                        call DOH_LOG "Sending DoH Sinkhole for Request" "${type}:${name}" ${hsl}
+                        HTTP::respond 200 content [binary format H* ${retstring}] "Content-Type" "application/dns-message" "Access-Control-Allow-Origin" "*"
+
+                    } elseif { ${ver} eq "JSON" } {
+                        set template "\{\"Status\": 0,\"TC\": false,\"RD\": true,\"RA\": true,\"AD\": true,\"CD\": false,\"Question\": \[\{\"name\": \"BLACKHOLE_TEMPLATE\",\"type\": 1 \}\],\"Answer\": \[\{\"name\": \"BLACKHOLE_TEMPLATE\",\"type\":1,\"TTL\": 84078,\"data\": \"${ipinjected}\" \}\]\}"
+                        set template [string map [list "BLACKHOLE_TEMPLATE" ${name}] ${template}]
+                        call DOH_LOG "Sending DoH Sinkhole for Request" "${type}:${name}" ${hsl}
+                        HTTP::respond 200 content ${template} "Content-Type" "application/dns-json" "Access-Control-Allow-Origin" "*"
+                    }
+                }
+                "AAAA" {
+                    ## Get sinkhole IP, or use default
+                    if { $static::DOH_SINKHOLE_IP6 ne "" } {
+                        set ipinjected $static::DOH_SINKHOLE_IP6
+                        set iphexinjected [call IP_TO_HEX "ipv6" $static::DOH_SINKHOLE_IP6]
+                    } else {
+                        set ipinjected "2002:c7c7:c7c7::"
+                        set iphexinjected [call IP_TO_HEX "ipv6" "2002:c7c7:c7c7::"]
+                    }
+
+                    if { ${ver} starts_with "WF-" } {
+                        ## Build DNS A record sinkhole response
+
+                        ## Insert --> {id},flags(8180),questions(0001),answer-rrs(0001),authority-rrs(0000),addl-rrs(0000)
+                        set retstring "${id}81800001000100000000"
+
+                        ## Split name into hex values
+                        foreach x [split ${name} "."] {
+                            append retstring [format %02x [string length ${x}]]
+                            foreach y [split ${x} ""] {
+                                append retstring [format %02x [scan ${y} %c]]
+                            }
+                        }
+
+                        ## Insert --> 00,AAAA(001c),IN(0001),name(c00c),type(001c),class(0001),ttl(00000012),length(0010)
+                        append retstring {00001c0001c00c001c0001000000120010}
+
+                        ## Insert --> answer (ipv6)
+                        append retstring ${iphexinjected}
+
+                        call DOH_LOG "Sending DoH Sinkhole for Request" "${type}:${name}" ${hsl}
+                        HTTP::respond 200 content [binary format H* ${retstring}] "Content-Type" "application/dns-message" "Access-Control-Allow-Origin" "*"
+
+                    } elseif { ${ver} eq "JSON" } {
+                        set template "\{\"Status\": 0,\"TC\": false,\"RD\": true,\"RA\": true,\"AD\": true,\"CD\": false,\"Question\": \[\{\"name\": \"BLACKHOLE_TEMPLATE\",\"type\": 28 \}\],\"Answer\": \[\{\"name\": \"BLACKHOLE_TEMPLATE\",\"type\":28,\"TTL\": 84078,\"data\": \"${ipinjected}\" \}\]\}"
+                        set template [string map [list "BLACKHOLE_TEMPLATE" ${name}] ${template}]
+                        call DOH_LOG "Sending DoH Sinkhole for Request" "${type}:${name}" ${hsl}
+                        HTTP::respond 200 content ${template} "Content-Type" "application/dns-json" "Access-Control-Allow-Origin" "*"
+                    }
+                }
+            }
+        }
+    }
+}
+
+## DOH_DECIDE_REQ
+## Queries against the blockhole or sinkhole categories, or performs general anomaly detection on the DoH request
+proc DOH_DECIDE_REQ { ver id name hsl } {
+    ## Make ECH_CHECK variable accessible outside this proc
+    upvar ECH_CHECK ECHCHECK
+
+    ## Get request name and type
+    set type [lindex [split ${name} ":"] 0]
+    set name [lindex [split ${name} ":"] 1]
+
+    ## Handle Encrypted Client Hello (ECH)
+    if { $type eq "HTTPS" } {
+        switch -- $static::ECH_BLOCK {
+            "block" { drop  }
+            "echstrip" { set ECHCHECK 1 } 
+            "none" -
+            default { ## do nothing }
+        }
+    }
+
+    ## Set category lookup type
+    switch $static::DOH_CATEGORY_TYPE {
+        "subscription" { set query_type "request_default" }
+        "custom_only" { set query_type "custom"}
+        "sub_and_custom" { set query_type "request_default_and_custom" }
+        default { set query_type "custom" }
+    }
+
+    ## Perform a single category lookup (and test for URLDB errors)
+    set cat ""
+    if { [catch {
+        set cat [CATEGORY::lookup "https://${name}/" ${query_type}]
+    } err] } {
+        call DOH_LOG "DoH Category Lookup Error: ${err}" "${type}:${name}" ${hsl}
+        return
+    }
+
+    ## DoH/DoT request log
+    if { $ver == "DoT" } {
+        call DOH_LOG "DoT Query Detected: name=${name},type=${type},version=TLS,id=${id},cat=${cat}" "" ${hsl}
+    } else {
+        call DOH_LOG "DoH Query Detected: name=${name},type=${type},version=${ver},id=${id},cat=${cat}" "" ${hsl}
+    }
+
+    # DoT ECH blocking and stripping currently only supports blocking (blackhole)
+    if { ( $ver == "DoT" ) and ( $type eq "HTTPS" ) and ( ( $static::ECH_BLOCK eq "block" ) or ( $static::ECH_BLOCK eq "echstrip" ) ) } {
+        call DOH_BLOCK "blackhole" ${type} "DoT" ${id} ${name} ${hsl}
+    }
+
+    ## Test for blackhole, sinkhole, or anomaly conditions (mutually exclusive)
+    ## - Blackhole currently supports A, AAAA, and TXT records
+    ## - Sinkhole supports A and AAAA records
+    ## - Anomaly detection + blocking/logging action
+    if { ([lsearch -exact $static::DOH_BLACKHOLE_BY_CATEGORY [getfield ${cat} " " 1]] >= 0) } {
+        switch -- ${static::DOH_BLACKHOLE_BY_CATEGORY_ACTION} {
+            "dryrun" {
+                call DOH_LOG "DoH blackhole by category detected (dryrun): " "${type}:${name}" ${hsl}
+            }
+            default {
+                call DOH_BLOCK "blackhole" ${type} ${ver} ${id} ${name} ${hsl}
+            }
+        }
+
+    } elseif { ([lsearch -exact $static::DOH_SINKHOLE_BY_CATEGORY [getfield ${cat} " " 1]] >= 0) } {
+        switch -- ${static::DOH_SINKHOLE_BY_CATEGORY_ACTION} {
+            "dryrun" {
+                call DOH_LOG "DoH sinkhole by category detected (dryrun): " "${type}:${name}" ${hsl}
+            }
+            default {
+                call DOH_BLOCK "sinkhole" ${type} ${ver} ${id} ${name} ${hsl}
+            }
+        }
+
+    } elseif { ${static::DOH_ANOMALY_DETECTION_ENABLE} } {
+        ## DoH Anomaly: Excessive domain name length
+        if { (${static::DOH_ANOMALY_CONDITION_LONG_DOMAIN}) and ([expr [string length ${name}] > ${static::DOH_ANOMALY_CONDITION_LONG_DOMAIN}]) } {
+            switch -- ${static::DOH_ANOMALY_CONDITION_LONG_DOMAIN_ACTION} {
+                "dryrun" {
+                    call DOH_LOG "DoH anomaly detected: Long Domain Name ([string length ${name}] chars) -- dryrun" "${type}:${name}" ${hsl}
+                }
+                "drop" {
+                    call DOH_LOG "DoH anomaly detected: Long Domain Name ([string length ${name}] chars) -- dropping" "${type}:${name}" ${hsl}
+                    reject
+                }
+                "blackhole" {
+                    call DOH_LOG "DoH anomaly detected: Long Domain Name ([string length ${name}] chars) -- sending to blackhole" "${type}:${name}" ${hsl}
+                    call DOH_BLOCK "blackhole" ${type} ${ver} ${id} ${name} ${hsl}
+                }
+                "sinkhole" {
+                    call DOH_LOG "DoH anomaly detected: Long Domain Name ([string length ${name}] chars) -- sending to sinkhole" "${type}:${name}" ${hsl}
+                    call DOH_BLOCK "sinkhole" ${type} ${ver} ${id} ${name} ${hsl}
+                }
+            }
+        }
+
+        ## DoH Anomaly: Uncommon DNS query type
+        if { (${static::DOH_ANOMALY_CONDITION_UNCOMMON_TYPE} ne "") and ([lsearch ${static::DOH_ANOMALY_CONDITION_UNCOMMON_TYPE} ${type}] >= 0) } {
+            switch -- ${static::DOH_ANOMALY_CONDITION_UNCOMMON_TYPE_ACTION} {
+                "dryrun" {
+                    call DOH_LOG "DoH anomaly detected: Uncommon Query Type (${type}) -- dryrun" "${type}:${name}" ${hsl}
+                }
+                "drop" {
+                    call DOH_LOG "DoH anomaly detected: Uncommon Query Type (${type}) -- dropping" "${type}:${name}" ${hsl}
+                    reject
+                }
+                "blackhole" {
+                    call DOH_LOG "DoH anomaly detected: Uncommon Query Type (${type}) -- sending to blackhole" "${type}:${name}" ${hsl}
+                    call DOH_BLOCK "blackhole" ${type} ${ver} ${id} ${name} ${hsl}
+                }
+                "sinkhole" {
+                    call DOH_LOG "DoH anomaly detected: Uncommon Query Type (${type}) -- sending to sinkhole" "${type}:${name}" ${hsl}
+                    call DOH_BLOCK "sinkhole" ${type} ${ver} ${id} ${name} ${hsl}
+                }
+            }
+        }
+    }
+}
+
+when CLIENT_ACCEPTED {
+    ## This event establishes HSL connection (as required) and sends reject if destination address is the blackhole IP.
+    if { [catch { if { ${static::DOH_LOG_HSL} ne "none" } { set hsl [HSL::open -proto UDP -pool ${static::DOH_LOG_HSL}] } else { set hsl "none" } } err] } { set hsl "none" }
+    if { [IP::local_addr] eq "199.199.199.199" } { reject }
+    if { [IP::local_addr] eq "0:0:0:0:0:ffff:c7c7:c7c7" } { reject }
+}
+
+when HTTP_REQUEST priority 750 {
+    ## Pre-stage ECH_CHECK variable
+    set ECH_CHECK 0
+
+    ## Test if this is DoH, and type of DoH
+    set is_doh_wire_post 0
+
+    ## Conditions:
+    ##  - Basic block and all DoH request types
+    ##  - DoH JSON GET
+    ##  - DoH WireFrame GET
+    ##  - DoH WireFrame POST
+    if { ($static::DOH_BLOCKING_BASIC) and \
+        ( ( [HTTP::method] equals "GET" and [HTTP::header exists "accept"] and [HTTP::header "accept"] equals "application/dns-json" ) or \
+        ( [HTTP::method] equals "GET" and [HTTP::header exists "content-type"] and [HTTP::header "content-type"] equals "application/dns-message" ) or \
+        ( [HTTP::method] equals "GET" and [HTTP::header exists "accept"] and [HTTP::header "accept"] equals "application/dns-message" ) or \
+        ( [HTTP::method] equals "POST" and [HTTP::header exists "content-type"] and [HTTP::header "content-type"] equals "application/dns-message" ) ) } {
+        ## DoH Basic blocking (all request types)
+        reject
+
+    } elseif { ( [HTTP::method] equals "GET" and [HTTP::header exists "accept"] and [HTTP::header "accept"] equals "application/dns-json" ) } {
+        ## DoH JSON GET request
+        set type [string toupper [URI::query [HTTP::uri] type]] ; if { ${type} eq "" } { set type "A" }
+        set name [URI::query [HTTP::uri] name] ; if { ${name} ne "" } { 
+            call DOH_DECIDE_REQ "JSON" "null" "${type}:${name}" ${hsl}
+        }
+
+    } elseif { ( ( [HTTP::method] equals "GET" and [HTTP::header exists "content-type"] and [HTTP::header "content-type"] equals "application/dns-message" ) \
+        or ( [HTTP::method] equals "GET" and [HTTP::header exists "accept"] and [HTTP::header "accept"] equals "application/dns-message" ) ) } {
+        ## DoH WireFormat GET request
+        if { [set name [URI::query [HTTP::uri] dns]] >= 0 } {
+            ## Use this construct to handle potentially missing padding characters
+            binary scan [call SAFE_BASE64_DECODE ${name}] H* tmp
+            set id [string range ${tmp} 0 3]
+            set tmp [string range ${tmp} 24 end]
+            if { [set name [call DECODE_DNS_REQ ${tmp}]] ne "error" } {
+                call DOH_DECIDE_REQ "WF-GET" ${id} ${name} ${hsl}
+            }
+        }
+
+    } elseif { ( [HTTP::method] equals "POST" and [HTTP::header exists "content-type"] and [HTTP::header "content-type"] equals "application/dns-message" ) } {
+        ## DoH WireFormat POST request
+        set is_doh_wire_post 1
+        HTTP::collect 100
+    }
+}
+when HTTP_REQUEST_DATA priority 250 {
+    ## Called for DoH WF POST requests
+    if { ($is_doh_wire_post) } {
+        binary scan [HTTP::payload] H* tmp
+        set id [string range ${tmp} 0 3]
+        set tmp [string range ${tmp} 24 end]
+        if { [set name [call DECODE_DNS_REQ ${tmp}]] ne "error" } {
+            call DOH_DECIDE_REQ "WF-POST" ${id} ${name} ${hsl}
+        }
+    }
+}
+when HTTP_RESPONSE priority 250 {
+    ## Called for DoH HTTPS record responses if ECH_CHECK is enabled --> used to strip the ECH parameter
+    if { ( [info exists ECH_CHECK] ) && ( ${ECH_CHECK} ) } {
+        set cl [HTTP::header "Content-Length"]
+        if { $cl eq "" } {
+            HTTP::collect 1048576
+        } else {
+            HTTP::collect $cl
+        }
+    }
+}
+when HTTP_RESPONSE_DATA priority 250 {
+    ## Called for DoH HTTPS record responses if ECH_CHECK is enabled --> used to strip the ECH parameter
+    if { ( [info exists ECH_CHECK] ) && ( ${ECH_CHECK} ) } {
+        set original [HTTP::payload]
+        set cleaned [call STRIP_HTTPS_ECH "doh" [HTTP::payload]]
+        if { $cleaned ne $original } {
+            HTTP::payload replace 0 [string length $original] $cleaned
+            HTTP::header replace "Content-Length" [string length $cleaned]
+        }
+    }
+}
+when CLIENTSSL_HANDSHAKE priority 50 {
+    ## This event triggers on decrypted DoT requests.
+    if { [TCP::local_port] eq "853" } {
+        SSL::collect
+    }
+}
+when CLIENTSSL_DATA priority 50 {
+    ## This event is triggered parse the decrypted DoT request.
+    if { [TCP::local_port] eq "853" } {
+        binary scan [SSL::payload] H* tmp
+        set id [string range ${tmp} 4 7]
+        set tmp [string range ${tmp} 28 end]
+        if { [set name [call DECODE_DNS_REQ ${tmp}]] ne "error" } {
+            call DOH_DECIDE_REQ "DoT" ${id} ${name} ${hsl}
+        }
+        SSL::release
+    }
+}
