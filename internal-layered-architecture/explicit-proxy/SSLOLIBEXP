@@ -135,6 +135,7 @@ proc HOST { arg } {
     ## parse incoming request URL
     if { [HTTP::uri] starts_with "http://" } { 
         set s_host [findstr [findstr [HTTP::uri] "http://" 7] "" 0 "/"]
+        set s_host [getfield ${s_host} ":" 1]
     } else {
         set s_host [findstr [HTTP::uri] "" 0 ":"]    
     }
