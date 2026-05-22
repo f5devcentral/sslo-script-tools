@@ -1,6 +1,6 @@
 ## SSL Orchestrator Use Case: Internal Layered Architecture - SSLOLIB Traffic Matching Library
-## Version: 2.3
-## Date: 2025-07-22
+## Version: 2.4
+## Date: 2025-05-22
 ## Author: Kevin Stewart, F5 Networks
 ##
 ## Updates:
@@ -10,6 +10,7 @@
 ##      2.2: Added HOST proc
 ##      2.2: Added target_ssf proc
 ##      2.3: Added IPv6 support
+##      2.4: Updated HOST procedure to support HTTP Hosts on non-standard ports
 ##
 ## Configuration:
 ##  - Step 1: Import this SSLOLIB iRule (name "SSLOLIB")
@@ -213,7 +214,7 @@ proc DSTPORT { arg } {
 proc HOST { arg } {
     upvar host s_host
     upvar cat catg
-    set s_host [HTTP::host]
+    set s_host [getfield [HTTP::host] ":" 1]
     if { ${s_host} != "" } {
         set arglist [split ${arg} ":"]
         switch -- [lindex ${arglist} 0] {
